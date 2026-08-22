@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Verify formatting
+        run: uv run ruff format --check .
+      - name: Build offline analytical database
+        run: uv run python -m cloudops_lens build --output /tmp/cloudops-lens-ci.duckdb
+      - name: Test
+        run: uv run pytest
+

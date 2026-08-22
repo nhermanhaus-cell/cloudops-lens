@@ -1,0 +1,12 @@
+.DS_Store
+.venv/
+.cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.duckdb
+*.duckdb.wal
+.streamlit/secrets.toml
+data/raw/.staging/
+
