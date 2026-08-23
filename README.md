@@ -2,6 +2,10 @@
 
 **A public-data reliability and GPU portfolio analytics prototype for Lambda Cloud.**
 
+[![CI](https://github.com/nhermanhaus-cell/cloudops-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/nhermanhaus-cell/cloudops-lens/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
+
 CloudOps Lens treats Lambda's public status incidents and GPU catalog as inputs to a small internal-style analytical data product. The data reasoning is inspectable: grain, many-to-many relationships, metric definitions, parsing evidence, quality state, and production tradeoffs are all visible.
 
 > This is an independent interview prototype built exclusively from public data. It is not an internal Lambda system and is not affiliated with or endorsed by Lambda.
