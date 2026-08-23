@@ -115,3 +115,32 @@ def test_capacity_timeout_is_a_nonfatal_sanitized_error() -> None:
 
 def test_offering_normalization_is_stable() -> None:
     assert offering_key("NVIDIA H100 SXM 80 GB", 8) == "nvidia-h100-sxm-80-gb-8x"
+
+
+def test_source_instance_types_can_share_an_analytical_offering_key() -> None:
+    duplicate_shape = {
+        "data": {
+            **INSTANCE_TYPES["data"],
+            "gpu_1x_a100_alt": {
+                "instance_type": {
+                    "name": "gpu_1x_a100_alt",
+                    "gpu_description": "NVIDIA A100 40 GB",
+                    "price_cents_per_hour": 149,
+                    "specs": {
+                        "gpus": 1,
+                        "vcpus": 32,
+                        "memory_gib": 240,
+                        "storage_gib": 1024,
+                    },
+                },
+                "regions_with_capacity_available": [{"name": "us-west-1"}],
+            },
+        }
+    }
+    result = normalize_capacity_payloads(REGIONS, duplicate_shape)
+    assert len(result["offerings"]) == 2
+    assert {row["source_instance_type"] for row in result["offerings"]} == {
+        "gpu_1x_a100",
+        "gpu_1x_a100_alt",
+    }
+    assert len({row["offering_key"] for row in result["offerings"]}) == 1

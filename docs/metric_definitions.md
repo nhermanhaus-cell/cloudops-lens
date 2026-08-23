@@ -72,7 +72,7 @@ One authenticated API observation for one normalized offering and one returned r
 
 ### Offering key
 
-A normalized key constructed from the API's GPU description—including model and VRAM—and GPU count. Lambda's source-native instance type is retained separately. Colliding normalized keys fail validation rather than silently merging offerings.
+A normalized analytical key constructed from the API's GPU description—including model and VRAM—and GPU count. Lambda's source-native instance type is retained separately and remains part of the availability grain, so multiple native instance types may intentionally share one analytical offering key.
 
 ### Available offering-region pair
 

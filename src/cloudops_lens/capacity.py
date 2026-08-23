@@ -59,7 +59,6 @@ def normalize_capacity_payloads(
 
     offerings: list[dict[str, Any]] = []
     availability: list[dict[str, Any]] = []
-    offering_keys: set[str] = set()
     region_names = {region["name"] for region in regions}
     for mapping_name, item in iterable:
         if not isinstance(item, dict):
@@ -74,11 +73,6 @@ def normalize_capacity_payloads(
         if not source_name or gpu_count <= 0:
             raise CapacityUnavailable("Lambda returned an incomplete instance-type definition.")
         key = offering_key(gpu_description, gpu_count)
-        if key in offering_keys:
-            raise CapacityUnavailable(
-                "Lambda returned instance types that collapse to the same normalized offering."
-            )
-        offering_keys.add(key)
         offerings.append(
             {
                 "offering_key": key,

@@ -51,7 +51,7 @@ SELECT
     source_kind,
     count(*) FILTER (WHERE available) AS available_offering_regions,
     count(DISTINCT region_id) FILTER (WHERE available) AS regions_with_capacity,
-    count(DISTINCT offering_key) FILTER (WHERE available) AS offerings_with_capacity,
+    count(DISTINCT source_instance_type) FILTER (WHERE available) AS offerings_with_capacity,
     count(*) AS evaluated_offering_regions
 FROM fact_instance_availability_snapshot
 GROUP BY snapshot_at, source_kind;

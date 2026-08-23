@@ -526,16 +526,14 @@ def regional_capacity() -> None:
         """
     )
     current = current.merge(region_metadata, on="region_name", how="left", validate="many_to_one")
-    current["offering_label"] = (
-        current["gpu_description"] + " · " + current["gpu_count"].astype(str) + "×"
-    )
+    current["offering_label"] = current["source_instance_type"] + " · " + current["gpu_description"]
     snapshot_at = pd.Timestamp(payload["snapshot_at"])
     age_minutes = max(0, int((pd.Timestamp.now(tz="UTC") - snapshot_at).total_seconds() / 60))
     available = current[current["available"]]
     cards = st.columns(4)
     cards[0].metric("Available pairs", len(available))
     cards[1].metric("Regions with capacity", available["region_name"].nunique())
-    cards[2].metric("Available offerings", available["offering_key"].nunique())
+    cards[2].metric("Available instance types", available["source_instance_type"].nunique())
     cards[3].metric("Cache age", f"{age_minutes}m")
     st.caption(
         f"API observation: {snapshot_at:%b %d, %Y %H:%M UTC} · "
@@ -563,7 +561,7 @@ def regional_capacity() -> None:
     left, right = st.columns(2)
     by_region = (
         available.groupby(["region_name", "physical_location"], as_index=False, dropna=False)
-        .agg(available_offerings=("offering_key", "nunique"))
+        .agg(available_offerings=("source_instance_type", "nunique"))
         .sort_values("available_offerings")
     )
     by_gpu = (
