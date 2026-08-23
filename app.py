@@ -539,6 +539,14 @@ def regional_capacity() -> None:
         f"API observation: {snapshot_at:%b %d, %Y %H:%M UTC} · "
         f"{len(offerings)} offerings evaluated across {availability.region_name.nunique()} regions"
     )
+    normalization = payload.get("normalization_summary", {})
+    skipped_non_gpu = int(normalization.get("skipped_non_gpu_instance_types", 0))
+    skipped_invalid = int(normalization.get("skipped_invalid_instance_types", 0))
+    if skipped_non_gpu or skipped_invalid:
+        st.caption(
+            f"Parser scope: skipped {skipped_non_gpu} non-GPU and {skipped_invalid} incomplete "
+            "instance-type records; valid GPU offerings remain visible."
+        )
 
     matrix = current.pivot_table(
         index="offering_label",

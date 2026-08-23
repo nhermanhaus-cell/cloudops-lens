@@ -144,3 +144,26 @@ def test_source_instance_types_can_share_an_analytical_offering_key() -> None:
         "gpu_1x_a100_alt",
     }
     assert len({row["offering_key"] for row in result["offerings"]}) == 1
+
+
+def test_non_gpu_and_incomplete_rows_do_not_hide_valid_gpu_capacity() -> None:
+    mixed_catalog = {
+        "data": {
+            **INSTANCE_TYPES["data"],
+            "cpu_general": {
+                "instance_type": {
+                    "name": "cpu_general",
+                    "description": "General purpose CPU",
+                    "specs": {"gpus": 0, "vcpus": 16, "memory_gib": 64},
+                },
+                "regions_with_capacity_available": [{"name": "us-east-1"}],
+            },
+            "incomplete": {"instance_type": None},
+        }
+    }
+    result = normalize_capacity_payloads(REGIONS, mixed_catalog)
+    assert len(result["offerings"]) == 1
+    assert result["normalization_summary"] == {
+        "skipped_non_gpu_instance_types": 1,
+        "skipped_invalid_instance_types": 1,
+    }

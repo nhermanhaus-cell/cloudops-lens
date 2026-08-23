@@ -59,19 +59,38 @@ def normalize_capacity_payloads(
 
     offerings: list[dict[str, Any]] = []
     availability: list[dict[str, Any]] = []
+    skipped_non_gpu = 0
+    skipped_invalid = 0
     region_names = {region["name"] for region in regions}
     for mapping_name, item in iterable:
         if not isinstance(item, dict):
-            raise CapacityUnavailable("Lambda returned an invalid instance-type record.")
+            skipped_invalid += 1
+            continue
         instance_type = item.get("instance_type", item)
         if not isinstance(instance_type, dict):
-            raise CapacityUnavailable("Lambda returned an invalid instance-type definition.")
+            skipped_invalid += 1
+            continue
         source_name = str(instance_type.get("name") or mapping_name or "")
-        gpu_description = str(instance_type.get("gpu_description") or "Unknown GPU")
         specs = instance_type.get("specs") or {}
-        gpu_count = int(specs.get("gpus") or 0)
-        if not source_name or gpu_count <= 0:
-            raise CapacityUnavailable("Lambda returned an incomplete instance-type definition.")
+        if not source_name or not isinstance(specs, dict):
+            skipped_invalid += 1
+            continue
+        try:
+            gpu_count = int(specs.get("gpus") or 0)
+            vcpus = int(specs.get("vcpus") or 0)
+            memory_gib = float(specs.get("memory_gib") or 0)
+            storage_gib = float(specs.get("storage_gib") or 0)
+            price_cents_per_hour = int(instance_type.get("price_cents_per_hour") or 0)
+        except (TypeError, ValueError):
+            skipped_invalid += 1
+            continue
+        if gpu_count <= 0:
+            skipped_non_gpu += 1
+            continue
+        gpu_description = str(instance_type.get("gpu_description") or "").strip()
+        if not gpu_description:
+            skipped_invalid += 1
+            continue
         key = offering_key(gpu_description, gpu_count)
         offerings.append(
             {
@@ -79,10 +98,10 @@ def normalize_capacity_payloads(
                 "source_instance_type": source_name,
                 "gpu_description": gpu_description,
                 "gpu_count": gpu_count,
-                "vcpus": int(specs.get("vcpus") or 0),
-                "memory_gib": float(specs.get("memory_gib") or 0),
-                "storage_gib": float(specs.get("storage_gib") or 0),
-                "price_cents_per_hour": int(instance_type.get("price_cents_per_hour") or 0),
+                "vcpus": vcpus,
+                "memory_gib": memory_gib,
+                "storage_gib": storage_gib,
+                "price_cents_per_hour": price_cents_per_hour,
             }
         )
         available_names = {
@@ -107,6 +126,10 @@ def normalize_capacity_payloads(
         "regions": regions,
         "offerings": offerings,
         "availability": availability,
+        "normalization_summary": {
+            "skipped_non_gpu_instance_types": skipped_non_gpu,
+            "skipped_invalid_instance_types": skipped_invalid,
+        },
     }
 
 

@@ -74,6 +74,8 @@ One authenticated API observation for one normalized offering and one returned r
 
 A normalized analytical key constructed from the API's GPU description—including model and VRAM—and GPU count. Lambda's source-native instance type is retained separately and remains part of the availability grain, so multiple native instance types may intentionally share one analytical offering key.
 
+The Regional Capacity view is GPU-scoped. API catalog entries without a positive GPU count are counted and excluded as non-GPU offerings. Structurally incomplete entries are also counted and excluded when other valid GPU offerings remain; the source is unavailable only when no valid GPU offering survives normalization.
+
 ### Available offering-region pair
 
 One offering/region row marked available in the current response. Counts describe only the response timestamp. They are not inventory, capacity quantity, fleet size, utilization, guaranteed launchability, or an SLA.
