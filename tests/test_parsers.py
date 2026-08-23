@@ -5,9 +5,11 @@ from cloudops_lens.parsers import (
     classify_themes,
     extract_regions,
     extract_severity,
+    github_event_category,
     latest_incident_severity,
     parse_capacity_gib,
     parse_pricing_html,
+    parse_region_metadata_html,
 )
 
 
@@ -31,8 +33,11 @@ def test_latest_incident_severity_skips_template_placeholder() -> None:
 
 
 def test_regions_preserve_raw_values_and_document_aliases() -> None:
-    regions = extract_regions("US-EAST-3 and europe-cental-1; not Dallas or AUS01")
+    regions = extract_regions(
+        "US-EAST-3, ap-southeaast-2, and europe-cental-1; not Dallas or AUS01"
+    )
     assert [(row.raw, row.canonical) for row in regions] == [
+        ("ap-southeaast-2", "ap-southeast-2"),
         ("europe-cental-1", "europe-central-1"),
         ("US-EAST-3", "us-east-3"),
     ]
@@ -48,6 +53,35 @@ def test_theme_classification_is_many_to_many_and_evidenced() -> None:
 def test_capacity_units_normalize_to_gib() -> None:
     assert parse_capacity_gib("512 GiB SSD") == 512
     assert parse_capacity_gib("2.75 TiB SSD") == 2816
+
+
+def test_region_metadata_parses_documented_location_and_geography() -> None:
+    rows = parse_region_metadata_html(
+        """
+        <table><thead><tr><th>Region</th><th>Physical location</th></tr></thead>
+        <tbody>
+          <tr><td>US-EAST-1</td><td>Washington, D.C., USA</td></tr>
+          <tr><td>europe-central-1</td><td>Frankfurt, Germany</td></tr>
+        </tbody></table>
+        """
+    )
+    assert rows[0].region_name == "us-east-1"
+    assert rows[0].country == "USA"
+    assert rows[0].geographic_group == "North America"
+    assert rows[1].physical_location == "Frankfurt, Germany"
+
+
+def test_region_metadata_rejects_changed_table_shape() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="region table"):
+        parse_region_metadata_html("<table><th>Zone</th><th>Location</th></table>")
+
+
+def test_github_event_categories_do_not_infer_people_or_productivity() -> None:
+    assert github_event_category("PushEvent") == "development"
+    assert github_event_category("WatchEvent") == "ecosystem_engagement"
+    assert github_event_category("MemberEvent") == "administration"
 
 
 def test_committed_pricing_snapshot_has_expected_grain() -> None:

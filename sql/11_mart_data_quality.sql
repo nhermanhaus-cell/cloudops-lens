@@ -38,6 +38,21 @@ WITH checks AS (
         'Known source spelling variants retained with a documented canonical value.'
     FROM raw_incident_region WHERE normalization_status = 'alias_corrected'
     UNION ALL
+    SELECT 'undocumented_incident_regions', 'warn', count(DISTINCT region.region_name)::BIGINT,
+        'Incident regions absent from the current public region directory remain visible.'
+    FROM bridge_incident_region AS bridge
+    JOIN dim_region AS region USING (region_id)
+    WHERE NOT region.is_currently_documented
+    UNION ALL
+    SELECT 'duplicate_region_metadata', 'fail', count(*)::BIGINT,
+        'Region codes must be unique within each documentation snapshot.'
+    FROM (
+        SELECT snapshot_at, region_name
+        FROM raw_region_metadata
+        GROUP BY snapshot_at, region_name
+        HAVING count(*) > 1
+    )
+    UNION ALL
     SELECT 'orphan_region_bridges', 'fail', count(*)::BIGINT,
         'Every incident-region bridge must reference an incident.'
     FROM bridge_incident_region AS bridge
@@ -48,6 +63,31 @@ WITH checks AS (
         'Instance hourly price must equal GPU count multiplied by per-GPU price.'
     FROM fact_instance_price_snapshot
     WHERE abs(instance_price_per_hour - gpu_count * price_per_gpu_hour) > 0.0001
+    UNION ALL
+    SELECT 'duplicate_capacity_grain', 'fail', count(*)::BIGINT,
+        'Capacity rows must be unique by snapshot, offering, and region.'
+    FROM (
+        SELECT snapshot_at, offering_key, source_instance_type, region_id
+        FROM fact_instance_availability_snapshot
+        GROUP BY snapshot_at, offering_key, source_instance_type, region_id
+        HAVING count(*) > 1
+    )
+    UNION ALL
+    SELECT 'duplicate_github_repository_grain', 'fail', count(*)::BIGINT,
+        'Repository rows must be unique by snapshot and repository ID.'
+    FROM (
+        SELECT snapshot_at, repository_id
+        FROM fact_github_repository_snapshot
+        GROUP BY snapshot_at, repository_id
+        HAVING count(*) > 1
+    )
+    UNION ALL
+    SELECT 'duplicate_github_event_ids', 'fail', count(*)::BIGINT,
+        'Deduplicated GitHub event IDs must be unique.'
+    FROM (
+        SELECT event_id FROM fact_github_event
+        GROUP BY event_id HAVING count(*) > 1
+    )
 ),
 display_checks AS (
     SELECT
@@ -71,8 +111,23 @@ counts AS (
     SELECT 'pricing_rows', 'info', count(*)::BIGINT,
         'GPU configurations parsed from the public pricing page.'
     FROM fact_instance_price_snapshot
+    UNION ALL
+    SELECT 'documented_region_rows', 'info', count(*)::BIGINT,
+        'Regions parsed from the latest Lambda documentation snapshot.'
+    FROM dim_region WHERE is_currently_documented
+    UNION ALL
+    SELECT 'github_repository_rows', 'info', count(*)::BIGINT,
+        'Repositories in the latest public GitHub snapshot.'
+    FROM mart_github_repository_latest
+    UNION ALL
+    SELECT 'github_event_rows', 'info', count(*)::BIGINT,
+        'Deduplicated recent public events captured across snapshots.'
+    FROM fact_github_event
+    UNION ALL
+    SELECT 'private_capacity_rows', 'info', count(*)::BIGINT,
+        'Authenticated capacity observations loaded from untracked local snapshots.'
+    FROM fact_instance_availability_snapshot
 )
 SELECT * FROM display_checks
 UNION ALL
 SELECT * FROM counts;
-

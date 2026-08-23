@@ -18,6 +18,7 @@ REGION_RE = re.compile(
 CANONICAL_REGION_RE = re.compile(r"^[a-z]+(?:-[a-z]+)+-\d+$")
 
 REGION_ALIASES = {
+    "ap-southeaast-2": "ap-southeast-2",
     "europe-cental-1": "europe-central-1",
 }
 
@@ -59,6 +60,14 @@ class ThemeMatch:
     name: str
     rule_id: str
     evidence: str
+
+
+@dataclass(frozen=True)
+class RegionMetadata:
+    region_name: str
+    physical_location: str
+    country: str
+    geographic_group: str
 
 
 @dataclass(frozen=True)
@@ -140,6 +149,56 @@ def classify_themes(text: str) -> list[ThemeMatch]:
                 )
                 break
     return matches
+
+
+def parse_region_metadata_html(html: str) -> list[RegionMetadata]:
+    """Parse Lambda's documented region table without inventing missing geography."""
+    soup = BeautifulSoup(html, "html.parser")
+    rows: list[RegionMetadata] = []
+    for table in soup.find_all("table"):
+        headers = [cell.get_text(" ", strip=True) for cell in table.find_all("th")]
+        if headers[:2] != ["Region", "Physical location"]:
+            continue
+        for table_row in table.select("tbody tr"):
+            cells = [cell.get_text(" ", strip=True) for cell in table_row.find_all(["th", "td"])]
+            if len(cells) < 2:
+                continue
+            region_name = cells[0].lower()
+            physical_location = cells[1]
+            country = physical_location.rsplit(",", maxsplit=1)[-1].strip()
+            prefix = region_name.split("-", maxsplit=1)[0]
+            geographic_group = {
+                "us": "North America",
+                "canada": "North America",
+                "southamerica": "South America",
+                "europe": "Europe",
+                "me": "Middle East",
+                "asia": "Asia Pacific",
+                "ap": "Asia Pacific",
+                "australia": "Asia Pacific",
+            }.get(prefix, "Other")
+            rows.append(
+                RegionMetadata(
+                    region_name=region_name,
+                    physical_location=physical_location,
+                    country=country,
+                    geographic_group=geographic_group,
+                )
+            )
+        break
+    if not rows:
+        raise ValueError("Lambda region table was not found")
+    if len({row.region_name for row in rows}) != len(rows):
+        raise ValueError("Lambda region table contains duplicate region codes")
+    return rows
+
+
+def github_event_category(event_type: str) -> str:
+    if event_type in {"WatchEvent", "ForkEvent"}:
+        return "ecosystem_engagement"
+    if event_type in {"MemberEvent", "PublicEvent"}:
+        return "administration"
+    return "development"
 
 
 def parse_number(value: str) -> float:

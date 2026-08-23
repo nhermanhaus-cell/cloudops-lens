@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+
 import duckdb
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from cloudops_lens.capacity import CapacityUnavailable, fetch_capacity_snapshot
 from cloudops_lens.config import DEFAULT_DB_PATH, PROJECT_ROOT
 from cloudops_lens.pipeline import build_database
 
@@ -37,6 +40,22 @@ def database_path() -> str:
 def query(sql: str, parameters: tuple = ()) -> pd.DataFrame:
     with duckdb.connect(database_path(), read_only=True) as connection:
         return connection.execute(sql, parameters).fetchdf()
+
+
+def lambda_api_key() -> str | None:
+    """Resolve a server-side credential without exposing it to a widget or log."""
+    environment_key = os.getenv("LAMBDA_API_KEY")
+    if environment_key:
+        return environment_key
+    try:
+        return st.secrets.get("LAMBDA_API_KEY")
+    except (FileNotFoundError, KeyError):
+        return None
+
+
+@st.cache_data(ttl=900, show_spinner="Checking current regional capacity…")
+def cached_live_capacity(_api_key: str) -> dict:
+    return fetch_capacity_snapshot(_api_key)
 
 
 def metric_duration(value: float | int | None) -> str:
@@ -167,7 +186,12 @@ def overview() -> None:
             """
         ).sort_values("incident_count")
         figure = px.bar(
-            region, x="incident_count", y="region_name", orientation="h", title="Affected regions"
+            region,
+            x="incident_count",
+            y="region_name",
+            orientation="h",
+            title="Affected regions",
+            hover_data={"physical_location": True, "incident_count": False},
         )
         figure.update_traces(
             marker_color="#38bdf8", hovertemplate="%{y}<br>%{x} incidents<extra></extra>"
@@ -323,6 +347,23 @@ def incident_explorer() -> None:
             "Derived themes: "
             + " · ".join(f"{row.theme_name} (`{row.rule_id}`)" for row in evidence.itertuples())
         )
+    region_detail = query(
+        """
+        SELECT region.region_name, region.physical_location, region.country,
+               region.is_currently_documented
+        FROM bridge_incident_region AS bridge
+        JOIN dim_region AS region USING (region_id)
+        WHERE bridge.incident_id = ?
+        ORDER BY region.region_name
+        """,
+        (selected_id,),
+    )
+    if not region_detail.empty:
+        descriptions = []
+        for row in region_detail.itertuples():
+            location = row.physical_location or "location not in current region documentation"
+            descriptions.append(f"{row.region_name} — {location}")
+        st.caption("Region metadata: " + " · ".join(descriptions))
     timeline = query(
         """
         SELECT update_status, coalesce(display_at, created_at) AS published_at, update_text
@@ -441,6 +482,316 @@ def gpu_explorer() -> None:
     quality_panel()
 
 
+def regional_capacity() -> None:
+    st.markdown("## Regional capacity")
+    st.caption(
+        "Current launch availability returned by Lambda's authenticated Cloud API. "
+        "The response is cached server-side for 15 minutes and is never committed to this "
+        "repository."
+    )
+    api_key = lambda_api_key()
+    if not api_key:
+        st.warning(
+            "Live capacity is unavailable because `LAMBDA_API_KEY` is not configured on this "
+            "server. The other four views remain fully functional from public snapshots."
+        )
+        st.info(
+            "Configure the key as an environment variable locally or in Streamlit Community "
+            "Cloud's encrypted secrets. CloudOps Lens never accepts credentials through the UI."
+        )
+        _capacity_history()
+        quality_panel()
+        return
+
+    try:
+        payload = cached_live_capacity(api_key)
+    except CapacityUnavailable as error:
+        st.warning(f"Live capacity is temporarily unavailable: {error}")
+        _capacity_history()
+        quality_panel()
+        return
+
+    offerings = pd.DataFrame(payload["offerings"])
+    availability = pd.DataFrame(payload["availability"])
+    current = availability.merge(
+        offerings,
+        on=["offering_key", "source_instance_type"],
+        how="left",
+        validate="many_to_one",
+    )
+    region_metadata = query(
+        """
+        SELECT region_name, physical_location, country, geographic_group
+        FROM dim_region
+        """
+    )
+    current = current.merge(region_metadata, on="region_name", how="left", validate="many_to_one")
+    current["offering_label"] = (
+        current["gpu_description"] + " · " + current["gpu_count"].astype(str) + "×"
+    )
+    snapshot_at = pd.Timestamp(payload["snapshot_at"])
+    age_minutes = max(0, int((pd.Timestamp.now(tz="UTC") - snapshot_at).total_seconds() / 60))
+    available = current[current["available"]]
+    cards = st.columns(4)
+    cards[0].metric("Available pairs", len(available))
+    cards[1].metric("Regions with capacity", available["region_name"].nunique())
+    cards[2].metric("Available offerings", available["offering_key"].nunique())
+    cards[3].metric("Cache age", f"{age_minutes}m")
+    st.caption(
+        f"API observation: {snapshot_at:%b %d, %Y %H:%M UTC} · "
+        f"{len(offerings)} offerings evaluated across {availability.region_name.nunique()} regions"
+    )
+
+    matrix = current.pivot_table(
+        index="offering_label",
+        columns="region_name",
+        values="available",
+        aggfunc="max",
+    ).astype(int)
+    heatmap = px.imshow(
+        matrix,
+        color_continuous_scale=[[0, "#172033"], [1, "#22c55e"]],
+        zmin=0,
+        zmax=1,
+        aspect="auto",
+        title="GPU offering availability by region",
+        labels={"x": "Region", "y": "GPU offering", "color": "Available"},
+    )
+    heatmap.update_coloraxes(showscale=False)
+    st.plotly_chart(styled_figure(heatmap, max(390, 38 * len(matrix))), use_container_width=True)
+
+    left, right = st.columns(2)
+    by_region = (
+        available.groupby(["region_name", "physical_location"], as_index=False, dropna=False)
+        .agg(available_offerings=("offering_key", "nunique"))
+        .sort_values("available_offerings")
+    )
+    by_gpu = (
+        available.groupby("gpu_description", as_index=False)
+        .agg(regional_breadth=("region_name", "nunique"))
+        .sort_values("regional_breadth")
+    )
+    with left:
+        figure = px.bar(
+            by_region,
+            x="available_offerings",
+            y="region_name",
+            orientation="h",
+            title="Available offerings by region",
+            hover_data={"physical_location": True, "available_offerings": False},
+        )
+        figure.update_traces(marker_color="#38bdf8")
+        st.plotly_chart(styled_figure(figure), use_container_width=True)
+    with right:
+        figure = px.bar(
+            by_gpu,
+            x="regional_breadth",
+            y="gpu_description",
+            orientation="h",
+            title="Regional breadth by GPU",
+        )
+        figure.update_traces(marker_color="#a78bfa")
+        st.plotly_chart(styled_figure(figure), use_container_width=True)
+
+    shown = current.copy()
+    shown["Status"] = shown["available"].map({True: "Available", False: "Unavailable"})
+    shown["Hourly price"] = shown["price_cents_per_hour"].map(lambda value: f"${value / 100:,.2f}")
+    st.dataframe(
+        shown[
+            [
+                "source_instance_type",
+                "gpu_description",
+                "gpu_count",
+                "region_name",
+                "physical_location",
+                "Status",
+                "Hourly price",
+            ]
+        ].rename(
+            columns={
+                "source_instance_type": "Instance type",
+                "gpu_description": "GPU",
+                "gpu_count": "GPUs",
+                "region_name": "Region",
+                "physical_location": "Physical location",
+            }
+        ),
+        hide_index=True,
+        use_container_width=True,
+    )
+    _capacity_history()
+    st.info(
+        "**Interpretation guardrail:** Availability is an API observation, not inventory, "
+        "fleet size, utilization, guaranteed launchability, or an SLA."
+    )
+    quality_panel()
+
+
+def _capacity_history() -> None:
+    history = query("SELECT * FROM mart_capacity_history ORDER BY snapshot_at")
+    if history["snapshot_at"].nunique() < 2:
+        st.info(
+            "Capacity history begins after repeated local collection. Run `refresh-capacity` "
+            "at different times to accumulate private, gitignored observations."
+        )
+        return
+    figure = px.line(
+        history,
+        x="snapshot_at",
+        y="available_offering_regions",
+        markers=True,
+        title="Private local availability history",
+        labels={"snapshot_at": "Observation", "available_offering_regions": "Available pairs"},
+    )
+    st.plotly_chart(styled_figure(figure), use_container_width=True)
+
+
+def open_source_activity() -> None:
+    st.markdown("## Open source activity")
+    st.caption(
+        "LambdaLabsML public repository portfolio and a bounded, recent capture of public "
+        "organization events. This is not complete activity history."
+    )
+    repositories = query(
+        "SELECT * FROM mart_github_repository_latest ORDER BY stargazers_count DESC"
+    )
+    events = query("SELECT * FROM fact_github_event ORDER BY event_created_at")
+    if repositories.empty:
+        st.warning("No committed GitHub snapshot is available. Run the public `refresh` command.")
+        quality_panel()
+        return
+    portfolio = query("SELECT * FROM mart_github_portfolio").iloc[0]
+    cards = st.columns(4)
+    cards[0].metric("Public repositories", int(portfolio.public_repositories))
+    cards[1].metric("Active owned · 90d", int(portfolio.active_owned_repositories_90d))
+    cards[2].metric("Stars · owned repos", int(portfolio.stars_on_owned_repositories or 0))
+    cards[3].metric("Captured events", len(events))
+    if not events.empty:
+        st.caption(
+            f"Repository snapshot: {portfolio.snapshot_at:%b %d, %Y %H:%M UTC} · "
+            f"captured event window: {events.event_created_at.min():%b %d, %Y}–"
+            f"{events.event_created_at.max():%b %d, %Y}"
+        )
+
+    left, right = st.columns((1.45, 1))
+    with left:
+        activity = query("SELECT * FROM mart_github_activity_daily ORDER BY event_date")
+        if not activity.empty:
+            figure = px.bar(
+                activity,
+                x="event_date",
+                y="event_count",
+                color="event_category",
+                title="Recent captured public events",
+                labels={
+                    "event_date": "Date",
+                    "event_count": "Events",
+                    "event_category": "Category",
+                },
+            )
+            st.plotly_chart(styled_figure(figure), use_container_width=True)
+    with right:
+        language = (
+            repositories[(~repositories["is_fork"]) & repositories["language"].notna()]
+            .groupby("language", as_index=False)
+            .agg(repositories=("repository_id", "nunique"))
+            .sort_values("repositories", ascending=False)
+        )
+        figure = px.pie(
+            language.head(10),
+            values="repositories",
+            names="language",
+            hole=0.55,
+            title="Owned repository language mix",
+        )
+        st.plotly_chart(styled_figure(figure), use_container_width=True)
+
+    left, right = st.columns(2)
+    with left:
+        event_types = (
+            events.groupby(["event_category", "event_type"], as_index=False)
+            .agg(events=("event_id", "nunique"))
+            .sort_values("events")
+        )
+        if not event_types.empty:
+            figure = px.bar(
+                event_types,
+                x="events",
+                y="event_type",
+                color="event_category",
+                orientation="h",
+                title="Captured event types",
+            )
+            st.plotly_chart(styled_figure(figure, 390), use_container_width=True)
+    with right:
+        top = (
+            repositories[~repositories["is_fork"]]
+            .nlargest(12, "stargazers_count")
+            .sort_values("stargazers_count")
+        )
+        figure = px.bar(
+            top,
+            x="stargazers_count",
+            y="name",
+            orientation="h",
+            title="Top owned repositories by stars",
+        )
+        figure.update_traces(marker_color="#f59e0b")
+        st.plotly_chart(styled_figure(figure, 390), use_container_width=True)
+
+    filter_columns = st.columns(3)
+    ownership = filter_columns[0].selectbox("Ownership", ["All", "Owned", "Fork"])
+    archive = filter_columns[1].selectbox("Lifecycle", ["All", "Active", "Archived"])
+    languages = filter_columns[2].multiselect(
+        "Language", sorted(repositories["language"].dropna().unique()), placeholder="All"
+    )
+    catalog = repositories.copy()
+    if ownership == "Owned":
+        catalog = catalog[~catalog["is_fork"]]
+    elif ownership == "Fork":
+        catalog = catalog[catalog["is_fork"]]
+    if archive == "Active":
+        catalog = catalog[~catalog["is_archived"]]
+    elif archive == "Archived":
+        catalog = catalog[catalog["is_archived"]]
+    if languages:
+        catalog = catalog[catalog["language"].isin(languages)]
+    shown = catalog.copy()
+    shown["Ownership"] = shown["is_fork"].map({False: "Owned", True: "Fork"})
+    shown["Lifecycle"] = shown["is_archived"].map({False: "Active", True: "Archived"})
+    st.dataframe(
+        shown[
+            [
+                "name",
+                "Ownership",
+                "Lifecycle",
+                "language",
+                "stargazers_count",
+                "forks_count",
+                "pushed_at",
+                "html_url",
+            ]
+        ].rename(
+            columns={
+                "name": "Repository",
+                "language": "Language",
+                "stargazers_count": "Stars",
+                "forks_count": "Forks",
+                "pushed_at": "Last push",
+                "html_url": "GitHub",
+            }
+        ),
+        hide_index=True,
+        use_container_width=True,
+        column_config={"GitHub": st.column_config.LinkColumn()},
+    )
+    st.info(
+        "Event categories describe public event types only. They do not identify employees or "
+        "measure individual or team productivity."
+    )
+    quality_panel()
+
+
 st.markdown(
     """
     <style>
@@ -474,7 +825,13 @@ with st.sidebar:
     )
     selected_view = st.radio(
         "Navigate",
-        ["Reliability overview", "Incident explorer", "GPU product explorer"],
+        [
+            "Reliability overview",
+            "Incident explorer",
+            "GPU product explorer",
+            "Regional capacity",
+            "Open source activity",
+        ],
         label_visibility="collapsed",
     )
     st.divider()
@@ -484,12 +841,17 @@ with st.sidebar:
     )
     st.markdown(
         "[Status source](https://status.lambda.ai) · "
-        "[Pricing source](https://lambda.ai/service/gpu-cloud)"
+        "[Pricing source](https://lambda.ai/service/gpu-cloud) · "
+        "[GitHub source](https://github.com/LambdaLabsML)"
     )
 
 if selected_view == "Reliability overview":
     overview()
 elif selected_view == "Incident explorer":
     incident_explorer()
-else:
+elif selected_view == "GPU product explorer":
     gpu_explorer()
+elif selected_view == "Regional capacity":
+    regional_capacity()
+else:
+    open_source_activity()

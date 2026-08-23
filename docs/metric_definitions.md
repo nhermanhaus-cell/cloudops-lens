@@ -42,6 +42,10 @@ The status API's separate `impact` value is retained as `source_impact`; it is n
 
 A region token explicitly present in the title or update text. Raw evidence is retained. Canonicalization lowercases and converts underscores to hyphens; documented aliases may correct a known spelling variant while preserving the source token. Facilities or city names are not mapped to regions unless a region token is also published.
 
+### Region metadata
+
+Physical location, country, and geographic group parsed from the latest committed Lambda region-documentation snapshot. `is_currently_documented` indicates whether the canonical region appears in that snapshot. It is not interpreted as a region's historical opening or closure date.
+
 ### Derived incident theme
 
 A deterministic, many-to-many analytical category triggered by a documented keyword in the incident title or update text. Current themes are networking, instance lifecycle, storage, power/facility, control plane, and managed services. The matching rule and evidence are stored on the bridge. Themes are derived annotations, not source-provided components.
@@ -60,3 +64,38 @@ One distinct GPU model, VRAM-per-GPU value, and GPU-count configuration in a dat
 
 `price_per_gpu_hour ÷ vram_gb_per_gpu`. Because both numerator and denominator are per GPU, GPU count does not change this ratio.
 
+## Regional capacity
+
+### Availability observation
+
+One authenticated API observation for one normalized offering and one returned region. The ingestion cross-joins all returned instance types and regions; a pair is `available = true` only when the region appears in `regions_with_capacity_available` for that instance type.
+
+### Offering key
+
+A normalized key constructed from the API's GPU description—including model and VRAM—and GPU count. Lambda's source-native instance type is retained separately. Colliding normalized keys fail validation rather than silently merging offerings.
+
+### Available offering-region pair
+
+One offering/region row marked available in the current response. Counts describe only the response timestamp. They are not inventory, capacity quantity, fleet size, utilization, guaranteed launchability, or an SLA.
+
+Historical charts require at least two private local observations. Those files are stored only under gitignored `data/private/`; the public deployment does not create durable capacity history.
+
+## Open-source activity
+
+### Public repository
+
+One repository returned by the LambdaLabsML organization REST endpoint at the repository snapshot timestamp. Owned repositories, forks, and archived repositories remain distinguishable.
+
+### Active owned repository · 90 days
+
+A non-fork, non-archived repository whose public `pushed_at` timestamp is within 90 days of the repository snapshot. This is a repository recency indicator, not a contributor or productivity metric.
+
+### Stars on owned repositories
+
+The sum of current `stargazers_count` across non-fork repositories in the latest snapshot. It is a mutable public counter, not historical stars gained during the captured event window.
+
+### Recent captured public event
+
+One unique GitHub organization event ID across all committed event snapshots. Overlapping captures are deduplicated by event ID. GitHub's organization-events endpoint is a bounded recent window, so counts are explicitly not complete activity history.
+
+Events are grouped deterministically as development, ecosystem engagement, or administration based only on event type. No employee identity, contribution ranking, or productivity score is inferred.

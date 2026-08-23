@@ -6,7 +6,7 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
 
-CloudOps Lens treats Lambda's public status incidents and GPU catalog as inputs to a small internal-style analytical data product. The data reasoning is inspectable: grain, many-to-many relationships, metric definitions, parsing evidence, quality state, and production tradeoffs are all visible.
+CloudOps Lens treats Lambda's public status incidents, GPU catalog, region documentation, Cloud API availability, and open-source portfolio as inputs to a small internal-style analytical data product. The data reasoning is inspectable: grain, many-to-many relationships, metric definitions, parsing evidence, quality state, credential boundaries, and production tradeoffs are all visible.
 
 > This is an independent interview prototype built exclusively from public data. It is not an internal Lambda system and is not affiliated with or endorsed by Lambda.
 
@@ -16,14 +16,16 @@ CloudOps Lens treats Lambda's public status incidents and GPU catalog as inputs 
 - Which incident themes recur across regions?
 - What source limitations or parsing exceptions should an analyst see before trusting a chart?
 - How does Lambda's current GPU portfolio compare on configuration, price, and VRAM economics?
+- Which GPU offerings does the authenticated API currently report as available in each region?
+- What does LambdaLabsML's owned public repository portfolio and recent captured activity look like?
 
-The app contains three focused views: **Reliability overview**, **Incident explorer**, and **GPU product explorer**. The overview uses distinct incident IDs so a ten-region incident still counts as one incident.
+The app contains five focused views: **Reliability overview**, **Incident explorer**, **GPU product explorer**, **Regional capacity**, and **Open source activity**. The overview uses distinct incident IDs so a ten-region incident still counts as one incident.
 
-[Deploy this repository on Streamlit Community Cloud](https://share.streamlit.io/) using branch `main`, entrypoint `app.py`, and Python 3.12. No secrets are required.
+[Deploy this repository on Streamlit Community Cloud](https://share.streamlit.io/) using branch `main`, entrypoint `app.py`, and Python 3.12. The first, second, third, and fifth views require no secrets. Regional capacity is an optional enhancement.
 
 ## Quick start
 
-Prerequisites: [`uv`](https://docs.astral.sh/uv/) and no API keys.
+Prerequisite: [`uv`](https://docs.astral.sh/uv/). An API key is optional.
 
 ```bash
 uv sync --locked
@@ -38,7 +40,23 @@ uv run python -m cloudops_lens refresh
 uv run python -m cloudops_lens build
 ```
 
-`refresh` downloads both sources, validates their shape and expected catalog grain, and atomically publishes the pair. A failed refresh cannot replace the last valid demo snapshot.
+`refresh` downloads and validates public incidents, pricing, region documentation, GitHub repositories, and up to 300 recent GitHub organization events. Incident and pricing files remain an atomic pair; region and GitHub snapshots advance independently in the analytical model. A failed refresh cannot replace the last valid demo inputs.
+
+To enable live regional capacity locally, place the key in the process environment—never in the UI or repository:
+
+```bash
+export LAMBDA_API_KEY="..."
+uv run python -m cloudops_lens refresh-capacity
+uv run python -m cloudops_lens build
+```
+
+`refresh-capacity` writes a timestamped observation only under gitignored `data/private/`. On Streamlit Community Cloud, add the following through the encrypted secrets interface:
+
+```toml
+LAMBDA_API_KEY = "..."
+```
+
+The deployed app fetches capacity server-side and caches it for 15 minutes. It never logs, displays, stores in DuckDB, or commits the key or live response. If the key or API is unavailable, the view shows a nonfatal explanation and the rest of the product still starts.
 
 ## Architecture
 
@@ -46,11 +64,17 @@ uv run python -m cloudops_lens build
 flowchart LR
     A["Lambda status API"] --> C["Timestamped raw snapshots"]
     B["Lambda GPU pricing page"] --> C
+    R["Public region documentation"] --> C
+    O["LambdaLabsML GitHub REST API"] --> C
     C --> D["Python validation + evidence extraction"]
     D --> E["DuckDB raw tables"]
     E --> F["SQL facts, dimensions + bridges"]
     F --> G["SQL analytical marts"]
     G --> H["Streamlit product"]
+    K["Server-side Lambda API key"] --> L["Live capacity request + 15m cache"]
+    L --> H
+    L -. "optional private snapshots" .-> P["gitignored local history"]
+    P --> E
 ```
 
 The central fact grain is one public incident. Regions and derived themes use bridge tables because each incident can have many of either, and each region or theme can appear in many incidents. GPU pricing is a dated snapshot fact because the catalog is mutable.
@@ -60,8 +84,9 @@ Key repository areas:
 ```text
 src/cloudops_lens/   ingestion, parsing, CLI, and atomic DuckDB build
 sql/                 inspectable fact, dimension, bridge, mart, and quality SQL
-data/raw/            committed incident JSON and pricing HTML snapshots
-tests/               parser, grain, determinism, arithmetic, and app smoke tests
+data/raw/            committed public incident, pricing, region, and GitHub snapshots
+data/private/        optional local capacity history; always gitignored
+tests/               parser, auth-failure, grain, determinism, arithmetic, and app tests
 docs/                metric contracts, model details, and interview walkthrough
 ```
 
@@ -73,17 +98,21 @@ Severity comes from the latest update containing exactly one published severity.
 
 Regions are extracted only when explicitly written in public text. The raw token is retained alongside a lowercase canonical value and any documented alias correction. Missing region remains missing.
 
+Current region documentation enriches canonical regions with physical location, country, and geographic group. Incident regions absent from current documentation remain in the model and appear as quality warnings.
+
 The status API does not provide incident-to-component relationships. The project therefore uses clearly labeled **derived themes**, backed by deterministic keyword rules and stored evidence, rather than claiming inferred themes are source facts.
 
 See [metric definitions](docs/metric_definitions.md) and the [data model](docs/data_model.md) for the complete contracts.
 
 ## Data quality and limitations
 
-The app exposes duplicate identifiers, unknown severity, missing regions, open incidents, negative durations, region normalization, pricing arithmetic, and raw-to-transformed counts. Warnings stay visible; they do not silently remove records.
+The app exposes duplicate identifiers, unknown severity, missing regions, open incidents, negative durations, region documentation gaps, pricing arithmetic, GitHub event overlap, and raw-to-transformed counts. Warnings stay visible; they do not silently remove records.
 
 The public incident endpoint currently returns a limited recent window rather than guaranteed complete history. CloudOps Lens displays the observed coverage dates and never describes that window as Lambda's complete incident history.
 
-The prototype intentionally does **not** estimate revenue loss, customer impact, utilization, service credits, or affected GPU capacity. Public status and list-price data cannot justify those metrics.
+Current Cloud API availability is an observation, not inventory, fleet size, utilization, guaranteed launchability, or an SLA. GitHub events are a bounded recent capture, not complete history, employee identity, or a productivity measure.
+
+The prototype intentionally does **not** estimate revenue loss, customer impact, utilization, service credits, affected fleet capacity, capacity forecasts, or causal incident-to-capacity relationships. The available data cannot justify those metrics.
 
 ## Verification
 
@@ -94,7 +123,7 @@ uv run pytest
 uv run python -m cloudops_lens build --output /tmp/cloudops-lens.duckdb
 ```
 
-CI repeats linting, formatting, a network-free build, all data tests, and Streamlit smoke tests. The deployed app also builds only from the committed snapshot, so a source outage or markup change cannot break the interview demo.
+CI repeats linting, formatting, a network-free public build, mocked API tests, all data tests, and five-view Streamlit smoke tests. CI never receives the Lambda API key. The deployed app builds its durable model only from committed public snapshots, so a source outage or markup change cannot break the core interview demo.
 
 ## Prototype versus production
 

@@ -9,4 +9,5 @@ __pycache__/
 *.duckdb.wal
 .streamlit/secrets.toml
 data/raw/.staging/
-
+data/private/
+work/

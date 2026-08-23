@@ -6,11 +6,11 @@
 
 ## 0:30–1:00 — Users and sources
 
-Primary users are Cloud Operations and Product; Data, Engineering, and Finance are secondary consumers. Show the snapshot timestamp and source coverage before any KPI.
+Primary users are Cloud Operations and Product; Data, Engineering, and Finance are secondary consumers. Show the independent source timestamps and coverage before any KPI.
 
 ## 1:00–2:00 — Model
 
-Open the ER diagram. One row in `fact_incident` is one public incident. Explain that incident-to-region is many-to-many: a multi-region incident must not be duplicated in the fact or collapsed to one region. The same reasoning applies to derived themes. Point out that catalog price is a snapshot fact, not a mutable product dimension.
+Open the ER diagram. One row in `fact_incident` is one public incident. Explain that incident-to-region is many-to-many: a multi-region incident must not be duplicated in the fact or collapsed to one region. The same reasoning applies to derived themes. Point out that pricing, availability, and repositories have different snapshot grains rather than being timeless dimensions.
 
 ## 2:00–2:45 — Metrics
 
@@ -18,11 +18,11 @@ Define Public MTTR as first public update to public resolution. Explain why open
 
 ## 2:45–3:45 — Product
 
-Use the overview for summary, then drill into one multi-region incident in the explorer and show the complete update history plus theme evidence. Finish with one GPU configuration comparison and the transparent workload arithmetic.
+Use the overview for summary, then drill into one multi-region incident and show its timeline, theme evidence, and physical region metadata. Compare one GPU configuration, then show the live capacity heatmap and explicitly distinguish availability from inventory. Finish on the open-source view's owned/fork distinction and captured-event coverage.
 
 ## 3:45–4:20 — Trust
 
-Open the quality panel. Show raw versus transformed counts, missing regions retained as unknown, open incidents retained, alias corrections exposed, and build-blocking uniqueness/duration/arithmetic checks.
+Open the quality panel. Show raw versus transformed counts, undocumented regions retained, open incidents retained, event overlap deduplicated, and build-blocking uniqueness/duration/arithmetic checks. Mention that the API key exists only in server configuration and capacity failures cannot prevent the public app from loading.
 
 ## 4:20–5:00 — Production tradeoff
 
@@ -34,6 +34,9 @@ Open the quality panel. Show raw versus transformed counts, missing regions reta
 - **What happens with ten regions?** Ten bridge rows, one fact row, and `count(distinct incident_id)` in aggregates.
 - **Why not estimate outage cost?** List price is not utilization, affected allocation, contracts, credits, or customer impact.
 - **Why the latest severity?** Public updates may refine severity; the stored conflict count keeps those changes observable.
-- **How is refresh safe?** Both sources validate before atomic promotion, and deployment uses the prior committed snapshot.
+- **How is refresh safe?** Public sources validate before atomic promotion, incident/pricing remain paired, and deployment uses committed snapshots.
+- **Why is capacity not in the public database?** It requires a credential and is operationally mutable. The public app keeps it in a short server cache; optional local history is explicitly private and gitignored.
+- **Why no capacity trend online?** The deployment has no durable private store. A trend appears only after at least two local observations, avoiding synthetic history.
+- **Are GitHub events complete?** No. They are a bounded recent public capture, deduplicated across snapshots and labeled accordingly.
+- **Why no contributor rankings?** Event metadata cannot justify employee identity or productivity inference, and that metric would be inappropriate for this product.
 - **What breaks first in production?** Presentation markup and free-text semantics, which is why the production path requires structured source contracts.
-

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import duckdb
 
+from cloudops_lens.config import SnapshotPaths, latest_snapshot
 from cloudops_lens.pipeline import build_database
 
 
@@ -54,6 +56,17 @@ def test_offline_build_is_deterministic_and_preserves_grain(tmp_path: Path) -> N
         ).fetchone()[0]
         assert fact_rows == 1
 
+        incident_region_count, enriched_region_count = connection.execute(
+            """
+            SELECT
+                (SELECT count(DISTINCT region_name) FROM raw_incident_region),
+                (SELECT count(DISTINCT raw.region_name)
+                 FROM raw_incident_region AS raw
+                 JOIN dim_region AS region USING (region_name))
+            """
+        ).fetchone()
+        assert incident_region_count == enriched_region_count
+
         open_count = connection.execute(
             """
             SELECT count(*) FROM fact_incident
@@ -76,3 +89,42 @@ def test_price_snapshot_arithmetic() -> None:
         """,
     )
     assert mismatches == []
+
+
+def test_overlapping_github_event_snapshots_deduplicate_by_event_id(tmp_path: Path) -> None:
+    base = latest_snapshot()
+    first = tmp_path / "20260821T000000Z.json"
+    second = tmp_path / "20260822T000000Z.json"
+    shared = {
+        "id": "event-1",
+        "type": "PushEvent",
+        "created_at": "2026-08-20T12:00:00Z",
+        "repo": {"name": "LambdaLabsML/example"},
+        "payload": {"size": 2},
+    }
+    first.write_text(json.dumps([shared]))
+    second.write_text(
+        json.dumps(
+            [
+                shared,
+                {
+                    "id": "event-2",
+                    "type": "WatchEvent",
+                    "created_at": "2026-08-21T12:00:00Z",
+                    "repo": {"name": "LambdaLabsML/example"},
+                    "payload": {},
+                },
+            ]
+        )
+    )
+    snapshot = SnapshotPaths(
+        snapshot_id=base.snapshot_id,
+        incidents=base.incidents,
+        pricing=base.pricing,
+        regions=base.regions,
+        github_events=(first, second),
+    )
+    database = tmp_path / "deduplicated.duckdb"
+    build_database(database, snapshot)
+    assert _rows(database, "SELECT count(*) FROM raw_github_event") == [(3,)]
+    assert _rows(database, "SELECT count(*) FROM fact_github_event") == [(2,)]
