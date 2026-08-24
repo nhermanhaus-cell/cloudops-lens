@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from hashlib import sha256
+from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -8,7 +10,7 @@ import plotly.express as px
 import streamlit as st
 
 from cloudops_lens.capacity import CapacityUnavailable, fetch_capacity_snapshot
-from cloudops_lens.config import DEFAULT_DB_PATH, PROJECT_ROOT
+from cloudops_lens.config import PROJECT_ROOT, SQL_DIR, SnapshotPaths, latest_snapshot
 from cloudops_lens.pipeline import build_database
 
 st.set_page_config(
@@ -27,18 +29,38 @@ COLORS = {
 }
 
 
-@st.cache_resource(show_spinner="Building the analytical model from the committed snapshot…")
-def database_path() -> str:
-    if DEFAULT_DB_PATH.exists():
-        return str(DEFAULT_DB_PATH)
-    cache_path = PROJECT_ROOT / ".cache" / "dashboard.duckdb"
-    build_database(cache_path)
+def model_fingerprint(snapshot: SnapshotPaths) -> str:
+    """Version generated databases by every model and selected source input."""
+    digest = sha256()
+    source_paths: tuple[Path, ...] = (
+        snapshot.incidents,
+        snapshot.pricing,
+        *((snapshot.regions,) if snapshot.regions else ()),
+        *snapshot.github_repositories,
+        *snapshot.github_events,
+        *snapshot.private_capacity,
+    )
+    for path in (*sorted(SQL_DIR.glob("*.sql")), *source_paths):
+        digest.update(str(path.relative_to(PROJECT_ROOT)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+SELECTED_SNAPSHOT = latest_snapshot()
+MODEL_FINGERPRINT = model_fingerprint(SELECTED_SNAPSHOT)
+
+
+@st.cache_resource(show_spinner="Building the analytical model from committed snapshots…")
+def database_path(fingerprint: str) -> str:
+    cache_path = PROJECT_ROOT / ".cache" / f"dashboard-{fingerprint}.duckdb"
+    if not cache_path.exists():
+        build_database(cache_path, SELECTED_SNAPSHOT)
     return str(cache_path)
 
 
 @st.cache_data(show_spinner=False)
 def query(sql: str, parameters: tuple = ()) -> pd.DataFrame:
-    with duckdb.connect(database_path(), read_only=True) as connection:
+    with duckdb.connect(database_path(MODEL_FINGERPRINT), read_only=True) as connection:
         return connection.execute(sql, parameters).fetchdf()
 
 
