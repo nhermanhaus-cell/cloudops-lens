@@ -146,17 +146,39 @@ def overview() -> None:
     columns = st.columns(4)
     columns[0].metric("Incidents · 90d", int(summary.incidents_90d))
     columns[1].metric("High / critical", int(summary.high_critical_incidents_90d))
-    columns[2].metric("Median Public MTTR", metric_duration(summary.median_public_mttr_minutes))
-    columns[3].metric("P90 Public MTTR", metric_duration(summary.p90_public_mttr_minutes))
+    columns[2].metric(
+        "Mean time to public resolution (MTTR)",
+        metric_duration(summary.mean_public_mttr_minutes),
+    )
+    columns[3].metric(
+        "P90 public resolution time", metric_duration(summary.p90_public_mttr_minutes)
+    )
+    st.caption(
+        "Resolution-time guide: the mean is the average across resolved incidents. P90 means "
+        "90% of resolved incidents reached public resolution within this time; the slowest "
+        "10% took longer. Open incidents are excluded from both measures."
+    )
 
     left, right = st.columns((1.55, 1))
     with left:
         week = incidents["started_at"].dt.tz_convert(None).dt.to_period("W").dt.start_time
-        trend = incidents.assign(week=week)
-        trend = trend.groupby("week", as_index=False).agg(incidents=("incident_id", "nunique"))
-        figure = px.bar(trend, x="week", y="incidents", title="Incidents by week")
+        trend = (
+            incidents.assign(week=week)
+            .groupby(["week", "severity"], as_index=False)
+            .agg(incidents=("incident_id", "nunique"))
+        )
+        figure = px.bar(
+            trend,
+            x="week",
+            y="incidents",
+            color="severity",
+            title="Incidents by week and severity",
+            color_discrete_map=COLORS,
+            category_orders={"severity": ["critical", "high", "medium", "low", "unknown"]},
+        )
+        figure.update_layout(barmode="stack")
         figure.update_traces(
-            marker_color="#7c3aed", hovertemplate="%{x|%b %d}<br>%{y} incidents<extra></extra>"
+            hovertemplate="%{x|%b %d}<br>%{y} incidents<extra>%{fullData.name}</extra>"
         )
         st.plotly_chart(styled_figure(figure), use_container_width=True)
     with right:
@@ -237,7 +259,7 @@ def overview() -> None:
 def incident_explorer() -> None:
     data = query("SELECT * FROM mart_incident_explorer ORDER BY started_at DESC")
     st.markdown("## Incident explorer")
-    st.caption("Filter the summary, then inspect the exact public update history behind any row.")
+    st.caption("Filter the summary, then select an incident row to reveal its complete timeline.")
 
     min_date = data["started_at"].min().date()
     max_date = data["started_at"].max().date()
@@ -283,26 +305,30 @@ def incident_explorer() -> None:
             )
         ]
 
-    shown = filtered.copy()
+    shown = filtered.copy().reset_index(drop=True)
     shown["Public MTTR"] = shown["public_mttr_minutes"].map(metric_duration)
     shown["Started"] = shown["started_at"].dt.strftime("%b %d, %Y %H:%M UTC")
     shown["Resolved"] = shown["resolved_at"].dt.strftime("%b %d, %Y %H:%M UTC").fillna("Open")
     shown["Severity"] = shown["severity"].str.title()
     shown["Status"] = shown["status"].str.title()
     st.markdown(f"**{len(shown)} incidents**")
-    st.dataframe(
-        shown[
-            [
-                "title",
-                "Severity",
-                "Status",
-                "regions",
-                "themes",
-                "Started",
-                "Resolved",
-                "Public MTTR",
-            ]
-        ].rename(columns={"title": "Incident", "regions": "Regions", "themes": "Derived themes"}),
+    table_data = shown[
+        [
+            "title",
+            "Severity",
+            "Status",
+            "regions",
+            "themes",
+            "Started",
+            "Resolved",
+            "Public MTTR",
+        ]
+    ].rename(columns={"title": "Incident", "regions": "Regions", "themes": "Derived themes"})
+    table_event = st.dataframe(
+        table_data,
+        key="incident_explorer_table",
+        on_select="rerun",
+        selection_mode="single-row",
         hide_index=True,
         use_container_width=True,
         column_config={
@@ -315,22 +341,22 @@ def incident_explorer() -> None:
         st.warning("No incidents match the selected filters.")
         quality_panel()
         return
-    labels = {
-        row.incident_id: f"{row.started_at:%Y-%m-%d} · {row.title}" for row in filtered.itertuples()
-    }
-    selected_id = st.selectbox(
-        "Inspect incident timeline",
-        options=list(labels),
-        format_func=lambda value: labels[value],
-    )
+    selected_rows = table_event.selection.rows
+    if not selected_rows or selected_rows[0] >= len(shown):
+        st.info("Select an incident row above to open its details and published update timeline.")
+        quality_panel()
+        return
+    selected_id = shown.iloc[selected_rows[0]]["incident_id"]
     selected = filtered.loc[filtered["incident_id"] == selected_id].iloc[0]
-    detail_columns = st.columns(4)
-    detail_columns[0].metric("Severity", selected.severity.title())
-    detail_columns[1].metric("Status", selected.status.title())
-    detail_columns[2].metric("Public MTTR", metric_duration(selected.public_mttr_minutes))
-    detail_columns[3].metric(
-        "Regions", len(selected.regions.split(",")) if selected.regions != "Unknown" else 0
-    )
+    st.markdown(f"### {selected.title}")
+    with st.container(border=True):
+        detail_columns = st.columns(4)
+        detail_columns[0].metric("Severity", selected.severity.title())
+        detail_columns[1].metric("Status", selected.status.title())
+        detail_columns[2].metric("Public MTTR", metric_duration(selected.public_mttr_minutes))
+        detail_columns[3].metric(
+            "Regions", len(selected.regions.split(",")) if selected.regions != "Unknown" else 0
+        )
 
     evidence = query(
         """
@@ -364,6 +390,7 @@ def incident_explorer() -> None:
             location = row.physical_location or "location not in current region documentation"
             descriptions.append(f"{row.region_name} — {location}")
         st.caption("Region metadata: " + " · ".join(descriptions))
+    st.markdown("#### Published update timeline")
     timeline = query(
         """
         SELECT update_status, coalesce(display_at, created_at) AS published_at, update_text

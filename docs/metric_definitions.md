@@ -18,7 +18,11 @@ The incident-level `resolved_at` timestamp when present, otherwise the earliest 
 
 ### Public MTTR
 
-`resolved_at - started_at`, expressed in minutes and calculated only for resolved incidents. Dashboard medians and P90 values exclude open incidents rather than treating them as zero.
+`resolved_at - started_at`, expressed in minutes and calculated only for resolved incidents. Dashboard means, medians, and P90 values exclude open incidents rather than treating them as zero.
+
+### Mean time to public resolution
+
+The arithmetic average Public MTTR across resolved incidents in the selected window. The dashboard spells out the term and retains the MTTR acronym for stakeholders who already recognize it.
 
 The name is qualified because this measures the public communication window. It is not Lambda's internal mean time to detect, acknowledge, mitigate, recover, or restore service.
 
@@ -28,7 +32,7 @@ Incidents whose start is within 90 days of the selected snapshot timestamp. The 
 
 ### P90
 
-DuckDB's continuous 90th percentile (`quantile_cont`) over non-null Public MTTR values in the selected window.
+DuckDB's continuous 90th percentile (`quantile_cont`) over non-null Public MTTR values in the selected window. Put plainly: 90% of resolved incidents reached public resolution within this duration, while the slowest 10% took longer.
 
 ## Classification
 

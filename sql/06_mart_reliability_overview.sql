@@ -14,9 +14,9 @@ SELECT
     count(DISTINCT incident_id) AS incidents_90d,
     count(DISTINCT incident_id) FILTER (WHERE severity IN ('high', 'critical'))
         AS high_critical_incidents_90d,
+    avg(public_mttr_minutes) FILTER (WHERE is_resolved) AS mean_public_mttr_minutes,
     median(public_mttr_minutes) FILTER (WHERE is_resolved) AS median_public_mttr_minutes,
     quantile_cont(public_mttr_minutes, 0.9) FILTER (WHERE is_resolved)
         AS p90_public_mttr_minutes,
     count(DISTINCT incident_id) FILTER (WHERE NOT is_resolved) AS open_incidents_90d
 FROM windowed;
-

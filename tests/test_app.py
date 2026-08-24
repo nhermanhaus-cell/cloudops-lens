@@ -12,7 +12,7 @@ def test_all_dashboard_views_render_without_exceptions() -> None:
 
     app.radio[0].set_value("Incident explorer").run(timeout=90)
     assert not app.exception
-    assert app.selectbox
+    assert any("Select an incident row" in info.value for info in app.info)
 
     app.radio[0].set_value("GPU product explorer").run(timeout=90)
     assert not app.exception
