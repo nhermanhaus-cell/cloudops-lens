@@ -12,7 +12,11 @@ def test_all_dashboard_views_render_without_exceptions() -> None:
 
     app.radio[0].set_value("Incident explorer").run(timeout=90)
     assert not app.exception
-    assert any("Select an incident row" in info.value for info in app.info)
+    assert len(app.button) >= 1
+    app.button[0].click().run(timeout=90)
+    assert not app.exception
+    assert any("Published update timeline" in markdown.value for markdown in app.markdown)
+    assert app.button[0].label.startswith("▼")
 
     app.radio[0].set_value("GPU product explorer").run(timeout=90)
     assert not app.exception

@@ -169,16 +169,16 @@ def overview() -> None:
     columns[0].metric("Incidents · 90d", int(summary.incidents_90d))
     columns[1].metric("High / critical", int(summary.high_critical_incidents_90d))
     columns[2].metric(
-        "Mean time to public resolution (MTTR)",
-        metric_duration(summary.mean_public_mttr_minutes),
+        "Median public resolution time",
+        metric_duration(summary.median_public_mttr_minutes),
     )
     columns[3].metric(
         "P90 public resolution time", metric_duration(summary.p90_public_mttr_minutes)
     )
     st.caption(
-        "Resolution-time guide: the mean is the average across resolved incidents. P90 means "
-        "90% of resolved incidents reached public resolution within this time; the slowest "
-        "10% took longer. Open incidents are excluded from both measures."
+        "Resolution-time guide: the median is the typical resolved incident—half were faster "
+        "and half were slower. P90 means 90% reached public resolution within this time; the "
+        "slowest 10% took longer. Based on resolved incidents only."
     )
 
     left, right = st.columns((1.55, 1))
@@ -261,15 +261,31 @@ def overview() -> None:
         st.plotly_chart(styled_figure(figure, 360), use_container_width=True)
     with right:
         resolved = incidents[incidents["public_mttr_minutes"].notna()].copy()
-        resolved["Public MTTR (hours)"] = resolved["public_mttr_minutes"] / 60
-        figure = px.histogram(
-            resolved,
-            x="Public MTTR (hours)",
-            nbins=12,
-            title="Public MTTR distribution",
+        duration_labels = ["<1h", "1–3h", "3–6h", "6–12h", "12–24h", "1–2d", "2–4d", "4d+"]
+        resolved["duration_band"] = pd.cut(
+            resolved["public_mttr_minutes"],
+            bins=[0, 60, 180, 360, 720, 1440, 2880, 5760, float("inf")],
+            labels=duration_labels,
+            right=False,
+        )
+        distribution = (
+            resolved.groupby("duration_band", observed=False)
+            .agg(incidents=("incident_id", "nunique"))
+            .reindex(duration_labels, fill_value=0)
+            .reset_index()
+        )
+        figure = px.bar(
+            distribution,
+            x="duration_band",
+            y="incidents",
+            title="Public resolution-time distribution",
+            labels={"duration_band": "Resolution time", "incidents": "Resolved incidents"},
         )
         figure.update_traces(
-            marker_color="#f59e0b", hovertemplate="%{x:.1f} hours<br>%{y} incidents<extra></extra>"
+            marker_color="#f59e0b",
+            texttemplate="%{y}",
+            textposition="outside",
+            hovertemplate="%{x}<br>%{y} resolved incidents<extra></extra>",
         )
         st.plotly_chart(styled_figure(figure, 360), use_container_width=True)
 
@@ -279,6 +295,75 @@ def overview() -> None:
         "mitigation, or service-restoration time."
     )
     quality_panel()
+
+
+def toggle_incident(incident_id: str) -> None:
+    current = st.session_state.get("selected_incident_id")
+    st.session_state["selected_incident_id"] = None if current == incident_id else incident_id
+
+
+def render_incident_detail(selected) -> None:
+    selected_id = selected.incident_id
+    st.markdown(f"### {selected.title}")
+    detail_columns = st.columns(4)
+    detail_columns[0].metric("Severity", selected.severity.title())
+    detail_columns[1].metric("Status", selected.status.title())
+    detail_columns[2].metric(
+        "Public resolution time", metric_duration(selected.public_mttr_minutes)
+    )
+    detail_columns[3].metric(
+        "Regions", len(selected.regions.split(",")) if selected.regions != "Unknown" else 0
+    )
+
+    evidence = query(
+        """
+        SELECT theme.theme_name, bridge.rule_id, bridge.evidence
+        FROM bridge_incident_theme AS bridge
+        JOIN dim_incident_theme AS theme USING (theme_id)
+        WHERE bridge.incident_id = ?
+        ORDER BY theme.theme_name
+        """,
+        (selected_id,),
+    )
+    if not evidence.empty:
+        st.caption(
+            "Derived themes: "
+            + " · ".join(f"{row.theme_name} (`{row.rule_id}`)" for row in evidence.itertuples())
+        )
+    region_detail = query(
+        """
+        SELECT region.region_name, region.physical_location, region.country,
+               region.is_currently_documented
+        FROM bridge_incident_region AS bridge
+        JOIN dim_region AS region USING (region_id)
+        WHERE bridge.incident_id = ?
+        ORDER BY region.region_name
+        """,
+        (selected_id,),
+    )
+    if not region_detail.empty:
+        descriptions = []
+        for row in region_detail.itertuples():
+            location = row.physical_location or "location not in current region documentation"
+            descriptions.append(f"{row.region_name} — {location}")
+        st.caption("Region metadata: " + " · ".join(descriptions))
+    st.markdown("#### Published update timeline")
+    timeline = query(
+        """
+        SELECT update_status, coalesce(display_at, created_at) AS published_at, update_text
+        FROM fact_incident_update
+        WHERE incident_id = ?
+        ORDER BY coalesce(display_at, created_at), incident_update_id
+        """,
+        (selected_id,),
+    )
+    for update in timeline.itertuples():
+        with st.container(border=True):
+            st.markdown(
+                f"**{str(update.update_status).title()}** · "
+                f"{update.published_at:%b %d, %Y %H:%M UTC}"
+            )
+            st.markdown(update.update_text)
 
 
 def incident_explorer() -> None:
@@ -330,108 +415,49 @@ def incident_explorer() -> None:
             )
         ]
 
-    shown = filtered.copy().reset_index(drop=True)
-    shown["Public MTTR"] = shown["public_mttr_minutes"].map(metric_duration)
-    shown["Started"] = shown["started_at"].dt.strftime("%b %d, %Y %H:%M UTC")
-    shown["Resolved"] = shown["resolved_at"].dt.strftime("%b %d, %Y %H:%M UTC").fillna("Open")
-    shown["Severity"] = shown["severity"].str.title()
-    shown["Status"] = shown["status"].str.title()
-    st.markdown(f"**{len(shown)} incidents**")
-    table_data = shown[
-        [
-            "title",
-            "Severity",
-            "Status",
-            "regions",
-            "themes",
-            "Started",
-            "Resolved",
-            "Public MTTR",
-        ]
-    ].rename(columns={"title": "Incident", "regions": "Regions", "themes": "Derived themes"})
-    table_event = st.dataframe(
-        table_data,
-        key="incident_explorer_table",
-        on_select="rerun",
-        selection_mode="single-row",
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "Incident": st.column_config.TextColumn(width="large"),
-            "Derived themes": st.column_config.TextColumn(width="medium"),
-        },
-    )
-
     if filtered.empty:
         st.warning("No incidents match the selected filters.")
         quality_panel()
         return
-    selected_rows = table_event.selection.rows
-    if not selected_rows or selected_rows[0] >= len(shown):
-        st.info("Select an incident row above to open its details and published update timeline.")
-        quality_panel()
-        return
-    selected_id = shown.iloc[selected_rows[0]]["incident_id"]
-    selected = filtered.loc[filtered["incident_id"] == selected_id].iloc[0]
-    st.markdown(f"### {selected.title}")
-    with st.container(border=True):
-        detail_columns = st.columns(4)
-        detail_columns[0].metric("Severity", selected.severity.title())
-        detail_columns[1].metric("Status", selected.status.title())
-        detail_columns[2].metric("Public MTTR", metric_duration(selected.public_mttr_minutes))
-        detail_columns[3].metric(
-            "Regions", len(selected.regions.split(",")) if selected.regions != "Unknown" else 0
-        )
+    shown = filtered.copy().reset_index(drop=True)
+    shown["Public resolution"] = shown["public_mttr_minutes"].map(metric_duration)
+    shown["Started"] = shown["started_at"].dt.strftime("%b %d, %Y")
+    shown["Severity"] = shown["severity"].str.title()
+    shown["Status"] = shown["status"].str.title()
+    valid_ids = set(shown["incident_id"])
+    if st.session_state.get("selected_incident_id") not in valid_ids:
+        st.session_state["selected_incident_id"] = None
 
-    evidence = query(
-        """
-        SELECT theme.theme_name, bridge.rule_id, bridge.evidence
-        FROM bridge_incident_theme AS bridge
-        JOIN dim_incident_theme AS theme USING (theme_id)
-        WHERE bridge.incident_id = ?
-        ORDER BY theme.theme_name
-        """,
-        (selected_id,),
-    )
-    if not evidence.empty:
-        st.caption(
-            "Derived themes: "
-            + " · ".join(f"{row.theme_name} (`{row.rule_id}`)" for row in evidence.itertuples())
-        )
-    region_detail = query(
-        """
-        SELECT region.region_name, region.physical_location, region.country,
-               region.is_currently_documented
-        FROM bridge_incident_region AS bridge
-        JOIN dim_region AS region USING (region_id)
-        WHERE bridge.incident_id = ?
-        ORDER BY region.region_name
-        """,
-        (selected_id,),
-    )
-    if not region_detail.empty:
-        descriptions = []
-        for row in region_detail.itertuples():
-            location = row.physical_location or "location not in current region documentation"
-            descriptions.append(f"{row.region_name} — {location}")
-        st.caption("Region metadata: " + " · ".join(descriptions))
-    st.markdown("#### Published update timeline")
-    timeline = query(
-        """
-        SELECT update_status, coalesce(display_at, created_at) AS published_at, update_text
-        FROM fact_incident_update
-        WHERE incident_id = ?
-        ORDER BY coalesce(display_at, created_at), incident_update_id
-        """,
-        (selected_id,),
-    )
-    for update in timeline.itertuples():
+    st.markdown(f"**{len(shown)} incidents** · Select a title to expand one incident inline.")
+    headings = st.columns((4, 1, 1, 1.8, 1.3, 1.3))
+    for column, label in zip(
+        headings,
+        ["Incident", "Severity", "Status", "Regions", "Started", "Resolution"],
+        strict=True,
+    ):
+        column.caption(label)
+
+    for _, row in shown.iterrows():
+        is_selected = st.session_state.get("selected_incident_id") == row["incident_id"]
         with st.container(border=True):
-            st.markdown(
-                f"**{str(update.update_status).title()}** · "
-                f"{update.published_at:%b %d, %Y %H:%M UTC}"
+            row_columns = st.columns((4, 1, 1, 1.8, 1.3, 1.3))
+            arrow = "▼" if is_selected else "▶"
+            row_columns[0].button(
+                f"{arrow} {row['title']}",
+                key=f"incident_{row['incident_id']}",
+                type="tertiary",
+                use_container_width=True,
+                on_click=toggle_incident,
+                args=(row["incident_id"],),
             )
-            st.markdown(update.update_text)
+            row_columns[1].markdown(row["Severity"])
+            row_columns[2].markdown(row["Status"])
+            row_columns[3].markdown(row["regions"])
+            row_columns[4].markdown(row["Started"])
+            row_columns[5].markdown(row["Public resolution"])
+            if is_selected:
+                st.divider()
+                render_incident_detail(row)
     quality_panel()
 
 
