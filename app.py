@@ -204,21 +204,24 @@ def overview() -> None:
         )
         st.plotly_chart(styled_figure(figure), use_container_width=True)
     with right:
-        severity = (
-            incidents.groupby("severity", as_index=False)
-            .agg(incidents=("incident_id", "nunique"))
-            .sort_values("incidents")
+        severity = incidents.groupby("severity", as_index=False).agg(
+            incidents=("incident_id", "nunique")
         )
-        figure = px.bar(
+        figure = px.pie(
             severity,
-            x="incidents",
-            y="severity",
-            orientation="h",
+            values="incidents",
+            names="severity",
+            hole=0.58,
             title="Severity mix",
             color="severity",
             color_discrete_map=COLORS,
+            category_orders={"severity": ["critical", "high", "medium", "low", "unknown"]},
         )
-        figure.update_traces(hovertemplate="%{y}<br>%{x} incidents<extra></extra>")
+        figure.update_traces(
+            textposition="inside",
+            textinfo="percent",
+            hovertemplate="%{label}<br>%{value} incidents · %{percent}<extra></extra>",
+        )
         st.plotly_chart(styled_figure(figure), use_container_width=True)
 
     left, middle, right = st.columns(3)
