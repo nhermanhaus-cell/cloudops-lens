@@ -81,9 +81,13 @@ def test_live_capacity_view_uses_qualified_source_language(monkeypatch) -> None:
     assert "Not reported available" in rendered_text
     assert "not describe inventory quantity" in rendered_text
     assert "Only **positive API assignments** are source-reported" in rendered_text
+    warning_text = " ".join(warning.value for warning in app.warning)
+    assert "missing committed documentation metadata" not in warning_text
+    assert "live API region description differs" not in warning_text
     capacity_table = app.dataframe[0].value
     assert set(capacity_table["Status"]) == {
         "Reported available",
         "Not reported available",
     }
+    assert "Location" in capacity_table.columns
     assert "Whole-instance hourly price" in capacity_table.columns

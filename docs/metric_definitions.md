@@ -81,6 +81,8 @@ Each comparison row has one of two states:
 
 Existing private snapshots with the legacy `available` Boolean remain loadable and are interpreted using this same contract.
 
+The live capacity view displays the authenticated `/regions` description as its primary location label. Committed public documentation metadata is optional enrichment and is used only as a fallback when the API description is empty. Missing or differently worded documentation labels do not invalidate an API availability observation.
+
 ### Offering key
 
 A normalized analytical key constructed from the API's GPU description—including model and VRAM—and GPU count. Lambda's source-native instance type is retained separately and remains part of the availability grain, so multiple native instance types may intentionally share one analytical offering key.

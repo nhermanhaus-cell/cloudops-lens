@@ -92,7 +92,7 @@ Pricing and repository attributes are modeled as snapshot facts because both cat
 
 Authenticated capacity uses a separate security boundary. The deployed app requests current data into a 15-minute server-side cache without adding it to DuckDB. A developer may explicitly run `refresh-capacity` to create private, gitignored observations; `build` loads those only when present. Historical analysis therefore begins only after repeated private collection.
 
-Capacity is source-positive rather than inventory-negative. A `reported_available` row is backed by an exact `regions_with_capacity_available` reference. A `not_reported_available` row is derived by comparing the native instance type with the union of regions observed across both capacity endpoints. Availability-only region identifiers are retained and surfaced as reconciliation warnings rather than discarded. Live API region descriptions and committed documentation locations remain separate attributes so provenance is visible.
+Capacity is source-positive rather than inventory-negative. A `reported_available` row is backed by an exact `regions_with_capacity_available` reference. A `not_reported_available` row is derived by comparing the native instance type with the union of regions observed across both capacity endpoints. Availability-only region identifiers are retained rather than discarded. Live API region descriptions and committed documentation locations remain separate attributes for provenance; the product displays the live API description first and treats documentation as optional fallback enrichment. Metadata differences remain available in a collapsed reconciliation section instead of interrupting the operational view.
 
 ## Production evolution
 

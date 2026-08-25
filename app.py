@@ -623,6 +623,12 @@ def regional_capacity() -> None:
             live_regions[column] = default
     current = current.merge(live_regions, on="region_name", how="left", validate="many_to_one")
     current = current.merge(region_metadata, on="region_name", how="left", validate="many_to_one")
+    api_locations = current["api_region_description"].fillna("").str.strip()
+    documented_locations = current["physical_location"].fillna("").str.strip()
+    current["display_location"] = api_locations.where(api_locations.ne(""), documented_locations)
+    current["display_location"] = current["display_location"].mask(
+        current["display_location"].eq(""), "Not provided"
+    )
     current["offering_label"] = current["source_instance_type"] + " · " + current["gpu_description"]
     snapshot_at = pd.Timestamp(payload["snapshot_at"])
     age_minutes = max(0, int((pd.Timestamp.now(tz="UTC") - snapshot_at).total_seconds() / 60))
@@ -672,55 +678,6 @@ def regional_capacity() -> None:
         )
         != "".join(character for character in row.physical_location.lower() if character.isalnum())
     )
-    if availability_only_regions:
-        st.warning(
-            "Lambda reported availability in region identifiers absent from the separate "
-            f"`/regions` response. They are preserved for auditability: "
-            f"{', '.join(availability_only_regions)}."
-        )
-    if missing_documentation:
-        st.warning(
-            "Current API regions missing committed documentation metadata: "
-            f"{', '.join(missing_documentation)}."
-        )
-    if source_location_differences:
-        st.warning(
-            "Lambda's live API region description differs from the committed documentation "
-            "location for: "
-            f"{', '.join(source_location_differences)}. Both source values remain visible."
-        )
-
-    with st.expander("Source reconciliation"):
-        reconciliation_cards = st.columns(4)
-        reconciliation_cards[0].metric(
-            "API regions returned",
-            int(normalization.get("api_regions_returned", len(live_regions))),
-        )
-        reconciliation_cards[1].metric(
-            "GPU instance types retained",
-            int(normalization.get("gpu_instance_types_retained", len(offerings))),
-        )
-        reconciliation_cards[2].metric(
-            "Positive API assignments",
-            int(normalization.get("reported_available_assignments", len(reported_available))),
-        )
-        reconciliation_cards[3].metric(
-            "Comparison rows created",
-            int(normalization.get("comparison_rows_created", len(availability))),
-        )
-        st.markdown(
-            "Only **positive API assignments** are source-reported. Comparison rows are derived "
-            "from the cross-product of retained native GPU instance types and the union of region "
-            "identifiers observed across both API responses."
-        )
-        st.caption(
-            f"Availability-only regions: {len(availability_only_regions)} · "
-            f"Missing documentation metadata: {len(missing_documentation)} · "
-            f"API/documentation location labels that differ: {len(source_location_differences)} · "
-            f"Skipped non-GPU: {skipped_non_gpu} · Skipped incomplete: {skipped_invalid} · "
-            f"Malformed availability-region records: {malformed_region_records}"
-        )
-
     matrix = current.pivot_table(
         index="offering_label",
         columns="region_name",
@@ -762,7 +719,7 @@ def regional_capacity() -> None:
         left, right = st.columns(2)
         by_region = (
             reported_available.groupby(
-                ["region_name", "api_region_description", "physical_location"],
+                ["region_name", "display_location"],
                 as_index=False,
                 dropna=False,
             )
@@ -782,8 +739,7 @@ def regional_capacity() -> None:
                 orientation="h",
                 title="Reported GPU instance types by region",
                 hover_data={
-                    "api_region_description": True,
-                    "physical_location": True,
+                    "display_location": True,
                     "reported_instance_types": False,
                 },
             )
@@ -807,6 +763,10 @@ def regional_capacity() -> None:
     shown["Whole-instance hourly price"] = shown["price_cents_per_hour"].map(
         lambda value: f"${value / 100:,.2f}"
     )
+    st.caption(
+        "Region locations use the current authenticated API description, with committed public "
+        "documentation as a fallback when the API does not provide one."
+    )
     st.dataframe(
         shown[
             [
@@ -814,8 +774,7 @@ def regional_capacity() -> None:
                 "gpu_description",
                 "gpu_count",
                 "region_name",
-                "api_region_description",
-                "physical_location",
+                "display_location",
                 "Status",
                 "Whole-instance hourly price",
             ]
@@ -825,8 +784,7 @@ def regional_capacity() -> None:
                 "gpu_description": "GPU",
                 "gpu_count": "GPUs",
                 "region_name": "Region",
-                "api_region_description": "API region description",
-                "physical_location": "Documented physical location",
+                "display_location": "Location",
             }
         ),
         hide_index=True,
@@ -838,6 +796,49 @@ def regional_capacity() -> None:
         "instance type in the region at the observation time. A negative comparison state means "
         "only that the region was not included in the positive list."
     )
+    with st.expander("Source reconciliation and metadata notes"):
+        reconciliation_cards = st.columns(4)
+        reconciliation_cards[0].metric(
+            "API regions returned",
+            int(normalization.get("api_regions_returned", len(live_regions))),
+        )
+        reconciliation_cards[1].metric(
+            "GPU instance types retained",
+            int(normalization.get("gpu_instance_types_retained", len(offerings))),
+        )
+        reconciliation_cards[2].metric(
+            "Positive API assignments",
+            int(normalization.get("reported_available_assignments", len(reported_available))),
+        )
+        reconciliation_cards[3].metric(
+            "Comparison rows created",
+            int(normalization.get("comparison_rows_created", len(availability))),
+        )
+        st.markdown(
+            "Only **positive API assignments** are source-reported. Comparison rows are derived "
+            "from the cross-product of retained native GPU instance types and the union of region "
+            "identifiers observed across both API responses."
+        )
+        if missing_documentation:
+            st.caption(
+                "Optional documentation enrichment is not published for: "
+                f"{', '.join(missing_documentation)}. Their current API descriptions are used "
+                "as the displayed locations."
+            )
+        if source_location_differences:
+            st.caption(
+                "The API and documentation use different location labels for: "
+                f"{', '.join(source_location_differences)}. The live API label is displayed."
+            )
+        if availability_only_regions:
+            st.caption(
+                "Availability references absent from the separate `/regions` list are preserved "
+                f"for auditability: {', '.join(availability_only_regions)}."
+            )
+        st.caption(
+            f"Skipped non-GPU: {skipped_non_gpu} · Skipped incomplete: {skipped_invalid} · "
+            f"Malformed availability-region records: {malformed_region_records}"
+        )
     quality_panel()
 
 
