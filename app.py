@@ -727,7 +727,9 @@ def regional_capacity() -> None:
         values="reported_available",
         aggfunc="max",
     ).astype(int)
-    status_matrix = matrix.replace({1: "Reported available", 0: "Not reported available"})
+    status_matrix = matrix.astype(bool).apply(
+        lambda column: column.map({True: "Reported available", False: "Not reported available"})
+    )
     heatmap = px.imshow(
         matrix,
         color_continuous_scale=[[0, "#172033"], [1, "#22c55e"]],
