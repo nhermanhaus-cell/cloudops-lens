@@ -563,9 +563,10 @@ def gpu_explorer() -> None:
 def regional_capacity() -> None:
     st.markdown("## Regional capacity")
     st.caption(
-        "Current launch availability returned by Lambda's authenticated Cloud API. "
+        "Point-in-time launch availability reported by Lambda's authenticated Cloud API. "
         "The response is cached server-side for 15 minutes and is never committed to this "
-        "repository."
+        "repository. It does not describe inventory quantity, fleet size, utilization, an SLA, "
+        "or guaranteed launchability."
     )
     api_key = lambda_api_key()
     if not api_key:
@@ -591,6 +592,12 @@ def regional_capacity() -> None:
 
     offerings = pd.DataFrame(payload["offerings"])
     availability = pd.DataFrame(payload["availability"])
+    if "reported_available" not in availability:
+        availability["reported_available"] = availability["available"]
+    if "availability_status" not in availability:
+        availability["availability_status"] = availability["reported_available"].map(
+            {True: "reported_available", False: "not_reported_available"}
+        )
     current = availability.merge(
         offerings,
         on=["offering_key", "source_instance_type"],
@@ -603,83 +610,207 @@ def regional_capacity() -> None:
         FROM dim_region
         """
     )
+    live_regions = pd.DataFrame(payload["regions"]).rename(
+        columns={"name": "region_name", "description": "api_region_description"}
+    )
+    for column, default in {
+        "api_region_description": "",
+        "reported_by_regions_endpoint": False,
+        "referenced_by_instance_type": False,
+        "availability_only": False,
+    }.items():
+        if column not in live_regions:
+            live_regions[column] = default
+    current = current.merge(live_regions, on="region_name", how="left", validate="many_to_one")
     current = current.merge(region_metadata, on="region_name", how="left", validate="many_to_one")
     current["offering_label"] = current["source_instance_type"] + " · " + current["gpu_description"]
     snapshot_at = pd.Timestamp(payload["snapshot_at"])
     age_minutes = max(0, int((pd.Timestamp.now(tz="UTC") - snapshot_at).total_seconds() / 60))
-    available = current[current["available"]]
+    reported_available = current[current["reported_available"]]
     cards = st.columns(4)
-    cards[0].metric("Available pairs", len(available))
-    cards[1].metric("Regions with capacity", available["region_name"].nunique())
-    cards[2].metric("Available instance types", available["source_instance_type"].nunique())
+    cards[0].metric("Reported available type-region pairs", len(reported_available))
+    cards[1].metric(
+        "Regions with reported availability", reported_available["region_name"].nunique()
+    )
+    cards[2].metric(
+        "GPU instance types with reported availability",
+        reported_available["source_instance_type"].nunique(),
+    )
     cards[3].metric("Cache age", f"{age_minutes}m")
     st.caption(
         f"API observation: {snapshot_at:%b %d, %Y %H:%M UTC} · "
-        f"{len(offerings)} offerings evaluated across {availability.region_name.nunique()} regions"
+        f"{len(offerings)} GPU instance types compared across "
+        f"{availability.region_name.nunique()} observed regions"
     )
     normalization = payload.get("normalization_summary", {})
     skipped_non_gpu = int(normalization.get("skipped_non_gpu_instance_types", 0))
     skipped_invalid = int(normalization.get("skipped_invalid_instance_types", 0))
-    if skipped_non_gpu or skipped_invalid:
+    malformed_region_records = int(
+        normalization.get("malformed_availability_region_records", 0)
+    )
+    availability_only_regions = normalization.get("availability_only_regions", [])
+    if skipped_non_gpu or skipped_invalid or malformed_region_records:
         st.caption(
             f"Parser scope: skipped {skipped_non_gpu} non-GPU and {skipped_invalid} incomplete "
-            "instance-type records; valid GPU offerings remain visible."
+            f"instance-type records and {malformed_region_records} malformed availability-region "
+            "records; valid GPU offerings remain visible."
+        )
+
+    documented_regions = set(
+        region_metadata.loc[region_metadata["physical_location"].notna(), "region_name"]
+    )
+    live_region_names = set(live_regions["region_name"])
+    missing_documentation = sorted(live_region_names - documented_regions)
+    source_location_differences = sorted(
+        row.region_name
+        for row in current[
+            current["api_region_description"].fillna("").ne("")
+            & current["physical_location"].fillna("").ne("")
+        ][["region_name", "api_region_description", "physical_location"]]
+        .drop_duplicates()
+        .itertuples()
+        if "".join(
+            character
+            for character in row.api_region_description.lower()
+            if character.isalnum()
+        )
+        != "".join(character for character in row.physical_location.lower() if character.isalnum())
+    )
+    if availability_only_regions:
+        st.warning(
+            "Lambda reported availability in region identifiers absent from the separate "
+            f"`/regions` response. They are preserved for auditability: "
+            f"{', '.join(availability_only_regions)}."
+        )
+    if missing_documentation:
+        st.warning(
+            "Current API regions missing committed documentation metadata: "
+            f"{', '.join(missing_documentation)}."
+        )
+    if source_location_differences:
+        st.warning(
+            "Lambda's live API region description differs from the committed documentation "
+            "location for: "
+            f"{', '.join(source_location_differences)}. Both source values remain visible."
+        )
+
+    with st.expander("Source reconciliation"):
+        reconciliation_cards = st.columns(4)
+        reconciliation_cards[0].metric(
+            "API regions returned",
+            int(normalization.get("api_regions_returned", len(live_regions))),
+        )
+        reconciliation_cards[1].metric(
+            "GPU instance types retained",
+            int(normalization.get("gpu_instance_types_retained", len(offerings))),
+        )
+        reconciliation_cards[2].metric(
+            "Positive API assignments",
+            int(normalization.get("reported_available_assignments", len(reported_available))),
+        )
+        reconciliation_cards[3].metric(
+            "Comparison rows created",
+            int(normalization.get("comparison_rows_created", len(availability))),
+        )
+        st.markdown(
+            "Only **positive API assignments** are source-reported. Comparison rows are derived "
+            "from the cross-product of retained native GPU instance types and the union of region "
+            "identifiers observed across both API responses."
+        )
+        st.caption(
+            f"Availability-only regions: {len(availability_only_regions)} · "
+            f"Missing documentation metadata: {len(missing_documentation)} · "
+            f"API/documentation location labels that differ: {len(source_location_differences)} · "
+            f"Skipped non-GPU: {skipped_non_gpu} · Skipped incomplete: {skipped_invalid} · "
+            f"Malformed availability-region records: {malformed_region_records}"
         )
 
     matrix = current.pivot_table(
         index="offering_label",
         columns="region_name",
-        values="available",
+        values="reported_available",
         aggfunc="max",
     ).astype(int)
+    status_matrix = matrix.replace(
+        {1: "Reported available", 0: "Not reported available"}
+    )
     heatmap = px.imshow(
         matrix,
         color_continuous_scale=[[0, "#172033"], [1, "#22c55e"]],
         zmin=0,
         zmax=1,
         aspect="auto",
-        title="GPU offering availability by region",
-        labels={"x": "Region", "y": "GPU offering", "color": "Available"},
+        title="API-reported GPU availability by region",
+        labels={"x": "Region", "y": "GPU instance type", "color": "API status"},
+    )
+    heatmap.update_traces(
+        customdata=status_matrix.to_numpy(),
+        hovertemplate=(
+            "GPU instance type=%{y}<br>Region=%{x}<br>Status=%{customdata}<extra></extra>"
+        ),
     )
     heatmap.update_coloraxes(showscale=False)
     st.plotly_chart(styled_figure(heatmap, max(390, 38 * len(matrix))), use_container_width=True)
+    st.caption(
+        "🟩 **Reported available:** region appears in Lambda's positive list · "
+        "⬛ **Not reported available:** region is absent from that list; this is not an explicit "
+        "inventory-unavailable signal."
+    )
 
-    left, right = st.columns(2)
-    by_region = (
-        available.groupby(["region_name", "physical_location"], as_index=False, dropna=False)
-        .agg(available_offerings=("source_instance_type", "nunique"))
-        .sort_values("available_offerings")
-    )
-    by_gpu = (
-        available.groupby("gpu_description", as_index=False)
-        .agg(regional_breadth=("region_name", "nunique"))
-        .sort_values("regional_breadth")
-    )
-    with left:
-        figure = px.bar(
-            by_region,
-            x="available_offerings",
-            y="region_name",
-            orientation="h",
-            title="Available offerings by region",
-            hover_data={"physical_location": True, "available_offerings": False},
+    if reported_available.empty:
+        st.info(
+            "Lambda did not report any GPU type-region pairs in its current positive "
+            "availability lists."
         )
-        figure.update_traces(marker_color="#38bdf8")
-        st.plotly_chart(styled_figure(figure), use_container_width=True)
-    with right:
-        figure = px.bar(
-            by_gpu,
-            x="regional_breadth",
-            y="gpu_description",
-            orientation="h",
-            title="Regional breadth by GPU",
+    else:
+        left, right = st.columns(2)
+        by_region = (
+            reported_available.groupby(
+                ["region_name", "api_region_description", "physical_location"],
+                as_index=False,
+                dropna=False,
+            )
+            .agg(reported_instance_types=("source_instance_type", "nunique"))
+            .sort_values("reported_instance_types")
         )
-        figure.update_traces(marker_color="#a78bfa")
-        st.plotly_chart(styled_figure(figure), use_container_width=True)
+        by_gpu = (
+            reported_available.groupby("gpu_description", as_index=False)
+            .agg(regional_breadth=("region_name", "nunique"))
+            .sort_values("regional_breadth")
+        )
+        with left:
+            figure = px.bar(
+                by_region,
+                x="reported_instance_types",
+                y="region_name",
+                orientation="h",
+                title="Reported GPU instance types by region",
+                hover_data={
+                    "api_region_description": True,
+                    "physical_location": True,
+                    "reported_instance_types": False,
+                },
+            )
+            figure.update_traces(marker_color="#38bdf8")
+            st.plotly_chart(styled_figure(figure), use_container_width=True)
+        with right:
+            figure = px.bar(
+                by_gpu,
+                x="regional_breadth",
+                y="gpu_description",
+                orientation="h",
+                title="GPU-family regional breadth (reported availability)",
+            )
+            figure.update_traces(marker_color="#a78bfa")
+            st.plotly_chart(styled_figure(figure), use_container_width=True)
 
     shown = current.copy()
-    shown["Status"] = shown["available"].map({True: "Available", False: "Unavailable"})
-    shown["Hourly price"] = shown["price_cents_per_hour"].map(lambda value: f"${value / 100:,.2f}")
+    shown["Status"] = shown["reported_available"].map(
+        {True: "Reported available", False: "Not reported available"}
+    )
+    shown["Whole-instance hourly price"] = shown["price_cents_per_hour"].map(
+        lambda value: f"${value / 100:,.2f}"
+    )
     st.dataframe(
         shown[
             [
@@ -687,9 +818,10 @@ def regional_capacity() -> None:
                 "gpu_description",
                 "gpu_count",
                 "region_name",
+                "api_region_description",
                 "physical_location",
                 "Status",
-                "Hourly price",
+                "Whole-instance hourly price",
             ]
         ].rename(
             columns={
@@ -697,7 +829,8 @@ def regional_capacity() -> None:
                 "gpu_description": "GPU",
                 "gpu_count": "GPUs",
                 "region_name": "Region",
-                "physical_location": "Physical location",
+                "api_region_description": "API region description",
+                "physical_location": "Documented physical location",
             }
         ),
         hide_index=True,
@@ -705,8 +838,9 @@ def regional_capacity() -> None:
     )
     _capacity_history()
     st.info(
-        "**Interpretation guardrail:** Availability is an API observation, not inventory, "
-        "fleet size, utilization, guaranteed launchability, or an SLA."
+        "**Interpretation guardrail:** A positive state means Lambda reported that native "
+        "instance type in the region at the observation time. A negative comparison state means "
+        "only that the region was not included in the positive list."
     )
     quality_panel()
 
@@ -722,10 +856,13 @@ def _capacity_history() -> None:
     figure = px.line(
         history,
         x="snapshot_at",
-        y="available_offering_regions",
+        y="reported_available_pairs",
         markers=True,
-        title="Private local availability history",
-        labels={"snapshot_at": "Observation", "available_offering_regions": "Available pairs"},
+        title="Private local reported-availability history",
+        labels={
+            "snapshot_at": "Observation",
+            "reported_available_pairs": "Reported available type-region pairs",
+        },
     )
     st.plotly_chart(styled_figure(figure), use_container_width=True)
 

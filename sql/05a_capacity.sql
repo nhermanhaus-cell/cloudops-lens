@@ -18,7 +18,7 @@ SELECT DISTINCT
     availability.offering_key,
     availability.source_instance_type,
     region.region_id,
-    availability.available,
+    availability.reported_available,
     availability.source_kind
 FROM raw_instance_availability AS availability
 JOIN dim_region AS region USING (region_name);
@@ -37,7 +37,7 @@ SELECT
     offering.price_cents_per_hour,
     region.region_name,
     region.physical_location,
-    availability.available,
+    availability.reported_available,
     availability.source_kind
 FROM fact_instance_availability_snapshot AS availability
 JOIN latest USING (snapshot_at)
@@ -49,9 +49,11 @@ CREATE TABLE mart_capacity_history AS
 SELECT
     snapshot_at,
     source_kind,
-    count(*) FILTER (WHERE available) AS available_offering_regions,
-    count(DISTINCT region_id) FILTER (WHERE available) AS regions_with_capacity,
-    count(DISTINCT source_instance_type) FILTER (WHERE available) AS offerings_with_capacity,
-    count(*) AS evaluated_offering_regions
+    count(*) FILTER (WHERE reported_available) AS reported_available_pairs,
+    count(DISTINCT region_id) FILTER (WHERE reported_available)
+        AS regions_with_reported_availability,
+    count(DISTINCT source_instance_type) FILTER (WHERE reported_available)
+        AS instance_types_with_reported_availability,
+    count(*) AS comparison_rows
 FROM fact_instance_availability_snapshot
 GROUP BY snapshot_at, source_kind;

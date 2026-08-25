@@ -56,7 +56,7 @@ uv run python -m cloudops_lens build
 LAMBDA_API_KEY = "..."
 ```
 
-The deployed app fetches capacity server-side and caches it for 15 minutes. It never logs, displays, stores in DuckDB, or commits the key or live response. If the key or API is unavailable, the view shows a nonfatal explanation and the rest of the product still starts.
+The deployed app fetches capacity server-side and caches it for 15 minutes. It never logs, displays, stores in DuckDB, or commits the key or live response. If the key or API is unavailable, the view shows a nonfatal explanation and the rest of the product still starts. Green capacity cells are positive API observations; dark cells mean only that Lambda did not report that type-region pair in its positive list. They are not explicit inventory-unavailable records.
 
 ## Architecture
 
@@ -110,7 +110,7 @@ The app exposes duplicate identifiers, unknown severity, missing regions, open i
 
 The public incident endpoint currently returns a limited recent window rather than guaranteed complete history. CloudOps Lens displays the observed coverage dates and never describes that window as Lambda's complete incident history.
 
-Current Cloud API availability is an observation, not inventory, fleet size, utilization, guaranteed launchability, or an SLA. GitHub events are a bounded recent capture, not complete history, employee identity, or a productivity measure.
+Current Cloud API availability is a 15-minute-cached observation, not inventory, fleet size, utilization, guaranteed launchability, or an SLA. The dashboard preserves the distinction between `reported_available` and the derived `not_reported_available` comparison state, and exposes endpoint reconciliation rather than silently dropping region mismatches. GitHub events are a bounded recent capture, not complete history, employee identity, or a productivity measure.
 
 The prototype intentionally does **not** estimate revenue loss, customer impact, utilization, service credits, affected fleet capacity, capacity forecasts, or causal incident-to-capacity relationships. The available data cannot justify those metrics.
 

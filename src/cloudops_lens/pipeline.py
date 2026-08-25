@@ -92,7 +92,7 @@ def _create_raw_tables(connection: duckdb.DuckDBPyConnection) -> None:
         );
         CREATE TABLE raw_instance_availability (
             snapshot_at TIMESTAMPTZ, offering_key VARCHAR, source_instance_type VARCHAR,
-            region_name VARCHAR, available BOOLEAN, source_kind VARCHAR
+            region_name VARCHAR, reported_available BOOLEAN, source_kind VARCHAR
         );
         CREATE TABLE raw_source_metadata (
             source_name VARCHAR, snapshot_id VARCHAR, snapshot_at TIMESTAMPTZ,
@@ -392,6 +392,13 @@ def _load_github_snapshots(
 
 
 def _load_capacity_snapshots(connection: duckdb.DuckDBPyConnection, snapshot: SnapshotPaths) -> int:
+    def reported_available(row: dict) -> bool:
+        if "reported_available" in row:
+            return bool(row["reported_available"])
+        if "available" in row:
+            return bool(row["available"])
+        raise ValueError("Capacity availability row is missing its reported-availability state.")
+
     availability_rows = 0
     for payload in load_private_capacity(snapshot.private_capacity):
         captured_at = datetime.fromisoformat(payload["snapshot_at"].replace("Z", "+00:00"))
@@ -417,7 +424,7 @@ def _load_capacity_snapshots(connection: duckdb.DuckDBPyConnection, snapshot: Sn
                 row["offering_key"],
                 row["source_instance_type"],
                 row["region_name"],
-                bool(row["available"]),
+                reported_available(row),
                 source_kind,
             )
             for row in payload["availability"]

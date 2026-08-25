@@ -72,7 +72,14 @@ One distinct GPU model, VRAM-per-GPU value, and GPU-count configuration in a dat
 
 ### Availability observation
 
-One authenticated API observation for one normalized offering and one returned region. The ingestion cross-joins all returned instance types and regions; a pair is `available = true` only when the region appears in `regions_with_capacity_available` for that instance type.
+One authenticated API observation for one Lambda-native instance type and one observed region. The observed region universe is the union of `/regions` and every valid region reference in `regions_with_capacity_available`; this prevents endpoint disagreement from dropping a positive observation. The ingestion cross-joins retained GPU instance types and that region universe for comparison.
+
+Each comparison row has one of two states:
+
+- `reported_available`: the region appears in `regions_with_capacity_available` for the native instance type. This is a positive API observation.
+- `not_reported_available`: the region does not appear in that positive list. This is a derived comparison state, not an explicit inventory-unavailable signal.
+
+Existing private snapshots with the legacy `available` Boolean remain loadable and are interpreted using this same contract.
 
 ### Offering key
 
@@ -80,9 +87,9 @@ A normalized analytical key constructed from the API's GPU description—includi
 
 The Regional Capacity view is GPU-scoped. API catalog entries without a positive GPU count are counted and excluded as non-GPU offerings. Structurally incomplete entries are also counted and excluded when other valid GPU offerings remain; the source is unavailable only when no valid GPU offering survives normalization.
 
-### Available offering-region pair
+### Reported available type-region pair
 
-One offering/region row marked available in the current response. Counts describe only the response timestamp. They are not inventory, capacity quantity, fleet size, utilization, guaranteed launchability, or an SLA.
+One native instance-type/region row positively reported in the current response. Counts describe only the response timestamp. They are not inventory, capacity quantity, fleet size, utilization, guaranteed launchability, or an SLA. `price_cents_per_hour` is the whole native instance type's hourly price, not a per-GPU price.
 
 Historical charts require at least two private local observations. Those files are stored only under gitignored `data/private/`; the public deployment does not create durable capacity history.
 

@@ -18,7 +18,7 @@ Define Public MTTR as first public update to public resolution. Explain why open
 
 ## 2:45–3:45 — Product
 
-Use the overview for summary, then drill into one multi-region incident and show its timeline, theme evidence, and physical region metadata. Compare one GPU configuration, then show the live capacity heatmap and explicitly distinguish availability from inventory. Finish on the open-source view's owned/fork distinction and captured-event coverage.
+Use the overview for summary, then drill into one multi-region incident and show its timeline, theme evidence, and physical region metadata. Compare one GPU configuration, then show the live capacity heatmap. Explain that green cells are positively reported by Lambda while dark cells mean only “not reported available,” not explicit inventory unavailability. Open source reconciliation to show the source-to-comparison counts, then finish on the open-source view's owned/fork distinction and captured-event coverage.
 
 ## 3:45–4:20 — Trust
 
@@ -37,6 +37,7 @@ Open the quality panel. Show raw versus transformed counts, undocumented regions
 - **How is refresh safe?** Public sources validate before atomic promotion, incident/pricing remain paired, and deployment uses committed snapshots.
 - **Why is capacity not in the public database?** It requires a credential and is operationally mutable. The public app keeps it in a short server cache; optional local history is explicitly private and gitignored.
 - **Why no capacity trend online?** The deployment has no durable private store. A trend appears only after at least two local observations, avoiding synthetic history.
+- **Does a dark capacity cell mean Lambda has no inventory?** No. The API supplies a positive list per native instance type. A dark cell means that region was not in the list at the observation time; it is not an inventory count or explicit negative state.
 - **Are GitHub events complete?** No. They are a bounded recent public capture, deduplicated across snapshots and labeled accordingly.
 - **Why no contributor rankings?** Event metadata cannot justify employee identity or productivity inference, and that metric would be inappropriate for this product.
 - **What breaks first in production?** Presentation markup and free-text semantics, which is why the production path requires structured source contracts.

@@ -49,23 +49,53 @@ def normalize_capacity_payloads(
     else:
         raise CapacityUnavailable("Lambda returned no instance types.")
 
-    regions: list[dict[str, str]] = []
+    regions_by_name: dict[str, dict[str, Any]] = {}
     for region in region_items:
         if not isinstance(region, dict) or not region.get("name"):
             raise CapacityUnavailable("Lambda returned an invalid region record.")
-        regions.append(
-            {"name": str(region["name"]), "description": str(region.get("description", ""))}
-        )
+        region_name = str(region["name"])
+        if region_name in regions_by_name:
+            raise CapacityUnavailable("Lambda returned duplicate region identifiers.")
+        regions_by_name[region_name] = {
+            "name": region_name,
+            "description": str(region.get("description", "")),
+            "reported_by_regions_endpoint": True,
+            "referenced_by_instance_type": False,
+            "availability_only": False,
+        }
+    api_region_count = len(regions_by_name)
 
     offerings: list[dict[str, Any]] = []
-    availability: list[dict[str, Any]] = []
+    reported_regions_by_instance_type: dict[str, set[str]] = {}
+    seen_instance_types: set[str] = set()
     skipped_non_gpu = 0
     skipped_invalid = 0
-    region_names = {region["name"] for region in regions}
+    malformed_availability_region_records = 0
     for mapping_name, item in iterable:
         if not isinstance(item, dict):
             skipped_invalid += 1
             continue
+        available_names: set[str] = set()
+        availability_items = item.get("regions_with_capacity_available", [])
+        if not isinstance(availability_items, list):
+            malformed_availability_region_records += 1
+            availability_items = []
+        for region in availability_items:
+            if not isinstance(region, dict) or not region.get("name"):
+                malformed_availability_region_records += 1
+                continue
+            region_name = str(region["name"])
+            available_names.add(region_name)
+            if region_name not in regions_by_name:
+                regions_by_name[region_name] = {
+                    "name": region_name,
+                    "description": str(region.get("description", "")),
+                    "reported_by_regions_endpoint": False,
+                    "referenced_by_instance_type": True,
+                    "availability_only": True,
+                }
+            else:
+                regions_by_name[region_name]["referenced_by_instance_type"] = True
         instance_type = item.get("instance_type", item)
         if not isinstance(instance_type, dict):
             skipped_invalid += 1
@@ -75,6 +105,9 @@ def normalize_capacity_payloads(
         if not source_name or not isinstance(specs, dict):
             skipped_invalid += 1
             continue
+        if source_name in seen_instance_types:
+            raise CapacityUnavailable("Lambda returned duplicate instance-type identifiers.")
+        seen_instance_types.add(source_name)
         try:
             gpu_count = int(specs.get("gpus") or 0)
             vcpus = int(specs.get("vcpus") or 0)
@@ -104,22 +137,37 @@ def normalize_capacity_payloads(
                 "price_cents_per_hour": price_cents_per_hour,
             }
         )
-        available_names = {
-            str(region.get("name"))
-            for region in item.get("regions_with_capacity_available", [])
-            if isinstance(region, dict) and region.get("name")
-        }
-        for region_name in sorted(region_names):
-            availability.append(
-                {
-                    "offering_key": key,
-                    "source_instance_type": source_name,
-                    "region_name": region_name,
-                    "available": region_name in available_names,
-                }
-            )
+        reported_regions_by_instance_type[source_name] = available_names
     if not offerings:
         raise CapacityUnavailable("Lambda returned no instance types.")
+
+    regions = [regions_by_name[name] for name in sorted(regions_by_name)]
+    region_names = set(regions_by_name)
+    availability: list[dict[str, Any]] = []
+    for offering in offerings:
+        source_name = offering["source_instance_type"]
+        available_names = reported_regions_by_instance_type[source_name]
+        for region_name in sorted(region_names):
+            reported_available = region_name in available_names
+            availability.append(
+                {
+                    "offering_key": offering["offering_key"],
+                    "source_instance_type": source_name,
+                    "region_name": region_name,
+                    # Retained for backward compatibility with existing private snapshots.
+                    "available": reported_available,
+                    "reported_available": reported_available,
+                    "availability_status": (
+                        "reported_available"
+                        if reported_available
+                        else "not_reported_available"
+                    ),
+                }
+            )
+    reported_assignments = sum(row["reported_available"] for row in availability)
+    availability_only_regions = [
+        region["name"] for region in regions if region["availability_only"]
+    ]
     return {
         "snapshot_at": captured_at.isoformat().replace("+00:00", "Z"),
         "source_kind": "authenticated_live",
@@ -127,8 +175,14 @@ def normalize_capacity_payloads(
         "offerings": offerings,
         "availability": availability,
         "normalization_summary": {
+            "api_regions_returned": api_region_count,
+            "gpu_instance_types_retained": len(offerings),
+            "reported_available_assignments": reported_assignments,
+            "comparison_rows_created": len(availability),
+            "availability_only_regions": availability_only_regions,
             "skipped_non_gpu_instance_types": skipped_non_gpu,
             "skipped_invalid_instance_types": skipped_invalid,
+            "malformed_availability_region_records": malformed_availability_region_records,
         },
     }
 

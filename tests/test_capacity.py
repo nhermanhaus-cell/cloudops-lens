@@ -74,6 +74,69 @@ def test_capacity_expands_every_offering_region_pair() -> None:
         ("us-east-1", True),
         ("us-west-1", False),
     }
+    assert {
+        (row["region_name"], row["availability_status"])
+        for row in result["availability"]
+    } == {
+        ("us-east-1", "reported_available"),
+        ("us-west-1", "not_reported_available"),
+    }
+    assert result["normalization_summary"]["reported_available_assignments"] == 1
+    assert result["normalization_summary"]["comparison_rows_created"] == 2
+
+
+def test_empty_positive_list_is_valid_and_never_claims_explicit_unavailability() -> None:
+    instance_types = json.loads(json.dumps(INSTANCE_TYPES))
+    instance_types["data"]["gpu_1x_a100"]["regions_with_capacity_available"] = []
+    result = normalize_capacity_payloads(REGIONS, instance_types)
+    assert all(not row["reported_available"] for row in result["availability"])
+    assert {row["availability_status"] for row in result["availability"]} == {
+        "not_reported_available"
+    }
+
+
+def test_availability_only_region_is_preserved_and_reconciled() -> None:
+    instance_types = json.loads(json.dumps(INSTANCE_TYPES))
+    instance_types["data"]["gpu_1x_a100"]["regions_with_capacity_available"].append(
+        {"name": "us-north-1", "description": "API-only region"}
+    )
+    result = normalize_capacity_payloads(REGIONS, instance_types)
+    positive_regions = {
+        row["region_name"] for row in result["availability"] if row["reported_available"]
+    }
+    assert positive_regions == {"us-east-1", "us-north-1"}
+    assert result["normalization_summary"]["availability_only_regions"] == ["us-north-1"]
+    assert result["normalization_summary"]["comparison_rows_created"] == 3
+    api_only = next(region for region in result["regions"] if region["name"] == "us-north-1")
+    assert api_only["availability_only"] is True
+    assert api_only["reported_by_regions_endpoint"] is False
+
+
+def test_duplicate_source_identifiers_fail_safely() -> None:
+    duplicate_regions = {
+        "data": [REGIONS["data"][0], REGIONS["data"][0]],
+    }
+    with pytest.raises(CapacityUnavailable, match="duplicate region"):
+        normalize_capacity_payloads(duplicate_regions, INSTANCE_TYPES)
+
+    duplicate_instance_types = {
+        "data": [
+            INSTANCE_TYPES["data"]["gpu_1x_a100"],
+            INSTANCE_TYPES["data"]["gpu_1x_a100"],
+        ]
+    }
+    with pytest.raises(CapacityUnavailable, match="duplicate instance-type"):
+        normalize_capacity_payloads(REGIONS, duplicate_instance_types)
+
+
+def test_malformed_availability_region_is_disclosed_without_hiding_valid_rows() -> None:
+    instance_types = json.loads(json.dumps(INSTANCE_TYPES))
+    instance_types["data"]["gpu_1x_a100"]["regions_with_capacity_available"].extend(
+        [None, {}, {"name": "us-west-1"}]
+    )
+    result = normalize_capacity_payloads(REGIONS, instance_types)
+    assert result["normalization_summary"]["malformed_availability_region_records"] == 2
+    assert result["normalization_summary"]["reported_available_assignments"] == 2
 
 
 def test_capacity_uses_bearer_auth_without_persisting_key() -> None:
@@ -163,7 +226,6 @@ def test_non_gpu_and_incomplete_rows_do_not_hide_valid_gpu_capacity() -> None:
     }
     result = normalize_capacity_payloads(REGIONS, mixed_catalog)
     assert len(result["offerings"]) == 1
-    assert result["normalization_summary"] == {
-        "skipped_non_gpu_instance_types": 1,
-        "skipped_invalid_instance_types": 1,
-    }
+    summary = result["normalization_summary"]
+    assert summary["skipped_non_gpu_instance_types"] == 1
+    assert summary["skipped_invalid_instance_types"] == 1

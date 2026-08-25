@@ -61,8 +61,9 @@ erDiagram
     FACT_INSTANCE_AVAILABILITY_SNAPSHOT {
         timestamp snapshot_at PK
         string offering_key PK
+        string source_instance_type PK
         integer region_id PK
-        boolean available
+        boolean reported_available
     }
     FACT_GITHUB_REPOSITORY_SNAPSHOT {
         timestamp snapshot_at PK
@@ -90,6 +91,8 @@ Raw source files share a timestamped snapshot ID. A snapshot becomes selectable 
 Pricing and repository attributes are modeled as snapshot facts because both catalogs are mutable. GitHub event snapshots overlap and are loaded cumulatively, then deduplicated by stable event ID. Region metadata uses its latest independent snapshot and enriches incident regions without dropping codes that are no longer—or not yet—present in current documentation.
 
 Authenticated capacity uses a separate security boundary. The deployed app requests current data into a 15-minute server-side cache without adding it to DuckDB. A developer may explicitly run `refresh-capacity` to create private, gitignored observations; `build` loads those only when present. Historical analysis therefore begins only after repeated private collection.
+
+Capacity is source-positive rather than inventory-negative. A `reported_available` row is backed by an exact `regions_with_capacity_available` reference. A `not_reported_available` row is derived by comparing the native instance type with the union of regions observed across both capacity endpoints. Availability-only region identifiers are retained and surfaced as reconciliation warnings rather than discarded. Live API region descriptions and committed documentation locations remain separate attributes so provenance is visible.
 
 ## Production evolution
 
