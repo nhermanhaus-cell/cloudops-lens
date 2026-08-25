@@ -1040,17 +1040,45 @@ with st.sidebar:
         "built as an interview prototype.</div>",
         unsafe_allow_html=True,
     )
-    selected_view = st.radio(
-        "Navigate",
-        [
-            "Reliability overview",
-            "Incident explorer",
-            "GPU product explorer",
-            "Regional capacity",
-            "Open source activity",
-        ],
+    primary_views = ["Reliability overview", "Incident explorer", "Regional capacity"]
+    other_views = ["GPU product explorer", "Open source activity"]
+    if "selected_view" not in st.session_state:
+        st.session_state.selected_view = primary_views[0]
+
+    def select_sidebar_view(source_key: str, other_key: str) -> None:
+        selection = st.session_state.get(source_key)
+        if selection:
+            st.session_state.selected_view = selection
+            st.session_state[other_key] = None
+
+    st.radio(
+        "Cloud Ops",
+        primary_views,
+        index=(
+            primary_views.index(st.session_state.selected_view)
+            if st.session_state.selected_view in primary_views
+            else None
+        ),
+        key="primary_navigation",
+        on_change=select_sidebar_view,
+        args=("primary_navigation", "other_navigation"),
         label_visibility="collapsed",
     )
+    with st.expander("Other Lambda Data", expanded=False):
+        st.radio(
+            "Other Lambda Data views",
+            other_views,
+            index=(
+                other_views.index(st.session_state.selected_view)
+                if st.session_state.selected_view in other_views
+                else None
+            ),
+            key="other_navigation",
+            on_change=select_sidebar_view,
+            args=("other_navigation", "primary_navigation"),
+            label_visibility="collapsed",
+        )
+    selected_view = st.session_state.selected_view
     st.divider()
     st.caption(
         "Public-data prototype · Not an internal Lambda system and not affiliated with or "

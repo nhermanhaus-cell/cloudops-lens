@@ -38,6 +38,8 @@ def test_all_dashboard_views_render_without_exceptions() -> None:
     app_path = Path(__file__).resolve().parents[1] / "app.py"
     app = AppTest.from_file(app_path, default_timeout=90).run(timeout=90)
     assert not app.exception
+    assert len(app.radio) == 2
+    assert any(expander.label == "Other Lambda Data" for expander in app.expander)
 
     app.radio[0].set_value("Incident explorer").run(timeout=90)
     assert not app.exception
@@ -47,7 +49,7 @@ def test_all_dashboard_views_render_without_exceptions() -> None:
     assert any("Published update timeline" in markdown.value for markdown in app.markdown)
     assert app.button[0].label.startswith("▼")
 
-    app.radio[0].set_value("GPU product explorer").run(timeout=90)
+    app.radio[1].set_value("GPU product explorer").run(timeout=90)
     assert not app.exception
     assert len(app.selectbox) >= 1
 
@@ -55,7 +57,7 @@ def test_all_dashboard_views_render_without_exceptions() -> None:
     assert not app.exception
     assert any("unavailable" in warning.value.lower() for warning in app.warning)
 
-    app.radio[0].set_value("Open source activity").run(timeout=90)
+    app.radio[1].set_value("Open source activity").run(timeout=90)
     assert not app.exception
 
 
