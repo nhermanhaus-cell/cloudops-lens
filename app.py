@@ -645,9 +645,7 @@ def regional_capacity() -> None:
     normalization = payload.get("normalization_summary", {})
     skipped_non_gpu = int(normalization.get("skipped_non_gpu_instance_types", 0))
     skipped_invalid = int(normalization.get("skipped_invalid_instance_types", 0))
-    malformed_region_records = int(
-        normalization.get("malformed_availability_region_records", 0)
-    )
+    malformed_region_records = int(normalization.get("malformed_availability_region_records", 0))
     availability_only_regions = normalization.get("availability_only_regions", [])
     if skipped_non_gpu or skipped_invalid or malformed_region_records:
         st.caption(
@@ -670,9 +668,7 @@ def regional_capacity() -> None:
         .drop_duplicates()
         .itertuples()
         if "".join(
-            character
-            for character in row.api_region_description.lower()
-            if character.isalnum()
+            character for character in row.api_region_description.lower() if character.isalnum()
         )
         != "".join(character for character in row.physical_location.lower() if character.isalnum())
     )
@@ -731,9 +727,7 @@ def regional_capacity() -> None:
         values="reported_available",
         aggfunc="max",
     ).astype(int)
-    status_matrix = matrix.replace(
-        {1: "Reported available", 0: "Not reported available"}
-    )
+    status_matrix = matrix.replace({1: "Reported available", 0: "Not reported available"})
     heatmap = px.imshow(
         matrix,
         color_continuous_scale=[[0, "#172033"], [1, "#22c55e"]],

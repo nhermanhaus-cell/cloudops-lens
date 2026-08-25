@@ -158,9 +158,7 @@ def normalize_capacity_payloads(
                     "available": reported_available,
                     "reported_available": reported_available,
                     "availability_status": (
-                        "reported_available"
-                        if reported_available
-                        else "not_reported_available"
+                        "reported_available" if reported_available else "not_reported_available"
                     ),
                 }
             )

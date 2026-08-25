@@ -74,10 +74,7 @@ def test_capacity_expands_every_offering_region_pair() -> None:
         ("us-east-1", True),
         ("us-west-1", False),
     }
-    assert {
-        (row["region_name"], row["availability_status"])
-        for row in result["availability"]
-    } == {
+    assert {(row["region_name"], row["availability_status"]) for row in result["availability"]} == {
         ("us-east-1", "reported_available"),
         ("us-west-1", "not_reported_available"),
     }
