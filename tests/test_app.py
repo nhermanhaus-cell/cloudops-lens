@@ -70,9 +70,9 @@ def test_live_capacity_view_uses_qualified_source_language(monkeypatch) -> None:
 
     assert not app.exception
     metric_labels = {metric.label for metric in app.metric}
-    assert "Reported available type-region pairs" in metric_labels
-    assert "Regions with reported availability" in metric_labels
-    assert "GPU instance types with reported availability" in metric_labels
+    assert "Reported pairs" in metric_labels
+    assert "Reported regions" in metric_labels
+    assert "Reported GPU types" in metric_labels
     rendered_text = " ".join(
         element.value
         for collection in (app.caption, app.info, app.markdown)

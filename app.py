@@ -634,13 +634,20 @@ def regional_capacity() -> None:
     age_minutes = max(0, int((pd.Timestamp.now(tz="UTC") - snapshot_at).total_seconds() / 60))
     reported_available = current[current["reported_available"]]
     cards = st.columns(4)
-    cards[0].metric("Reported available type-region pairs", len(reported_available))
+    cards[0].metric(
+        "Reported pairs",
+        len(reported_available),
+        help="Native GPU instance-type and region pairs in Lambda's positive availability list.",
+    )
     cards[1].metric(
-        "Regions with reported availability", reported_available["region_name"].nunique()
+        "Reported regions",
+        reported_available["region_name"].nunique(),
+        help="Distinct regions appearing in at least one positive availability assignment.",
     )
     cards[2].metric(
-        "GPU instance types with reported availability",
+        "Reported GPU types",
         reported_available["source_instance_type"].nunique(),
+        help="Distinct native GPU instance types with at least one positive region assignment.",
     )
     cards[3].metric("Cache age", f"{age_minutes}m")
     st.caption(
